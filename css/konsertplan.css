@@ -215,6 +215,9 @@ button.farlig:hover { border-color: var(--minus); color: var(--minus); }
   box-shadow: 0 3px 12px rgba(0,0,0,.07);
   overflow-x: auto;
 }
+/* På Resultater viser kortene det samme, så stripa skjules der */
+body.fane-resultater .stripe { display: none; }
+
 .stripe-del {
   position: relative;
   flex: 1 1 200px;

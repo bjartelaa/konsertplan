@@ -116,6 +116,7 @@ function render() {
   document.getElementById("sesongnavn").value = d.sesong.navn;
   document.getElementById("undertekst").textContent = `${d.program.length} konserter, ${d.saler.length} saler, ramme ${kr(d.sesong.ramme)}`;
   for (const b of document.querySelectorAll(".faner button")) b.setAttribute("aria-pressed", String(b.dataset.fane === state.fane));
+  document.body.classList.toggle("fane-resultater", state.fane === "resultater");
   const res = beregn();
   renderStripe(res);
   const main = document.getElementById("innhold");
@@ -254,7 +255,7 @@ function renderResultater(main, res) {
   };
   main.append(h("section", { class: "seksjon" },
     h("h2", {}, "Hva om salget eller pakkeprisen blir en annen?"),
-    fork("p", "ingress", "Dra i gliderne. Alt på siden regnes på nytt, også stripa øverst. Basis er Majas premiss: samme salg som i 2026 og 60 000 kr per konsert."),
+    fork("p", "ingress", "Dra i gliderne. Alt på siden regnes på nytt. Basis er Majas premiss: samme salg som i 2026 og 60 000 kr per konsert."),
     h("div", { class: "glidere" },
       glider("Etterspørsel i forhold til 2026", "etterspoerselsfaktor", 0.5, 1.3, 0.01, pst, 1),
       glider("Pakkepris per konsert", "pakke", 48000, 78000, 500, kr, 60000))));
