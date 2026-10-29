@@ -131,8 +131,19 @@ export function beregnPlan(sesong, saler, program, salVelger) {
   const netto = cf.reduce((a, b) => a + b, 0);
   const behov = Math.max(0, -Math.min(...saldo));
   const fastLeie = faste.reduce((a, p) => a + p.belop, 0);
+  // Lån ut over rammen: det saldoen ligger under rammen ved hvert månedsslutt, som en kassekreditt.
+  // Renten regnes per måned på trukket beløp og holdes utenfor nåverdien, slik casen krever.
+  // Den vises som egen linje, og «nåverdi etter rente» diskonterer rentebetalingene på samme måte.
+  const ramme = sesong.ramme ?? Infinity;
+  const trekk = saldo.map(s => Math.max(0, -s - ramme));
+  const renteMnd = sesong.laanRente ?? 0;
+  const renter = trekk.map(t => t * renteMnd / 12);
+  const laan = Math.max(0, ...trekk);
+  const rentekostnad = renter.reduce((a, b) => a + b, 0);
+  const nvEtterRente = nv - renter.reduce((sum, r, t) => sum + r * diskonteringsfaktor(sesong, t), 0);
   return { T, cf, linjer, saldo, netto, nv, behov, perKonsert, faste, fastLeie,
            holderRammen: sesong.ramme == null ? null : behov <= sesong.ramme,
+           laan, trekk, renter, rentekostnad, nvEtterRente, maanederMedLaan: trekk.filter(t => t > 0).length,
            salerIBruk: salerIBruk.map(x => x.id) };
 }
 
@@ -152,7 +163,7 @@ export function beregnAlle(sesong, saler, program) {
   for (const s of saler) altI[s.id] = beregnAltI(sesong, saler, program, s);
   const egen = beregnPlan(sesong, saler, program, k => k.salId);
   const blandet = new Set(program.map(k => k.salId)).size > 1;
-  return { altI, egen, blandet, avstaa: { nv: 0, netto: 0, behov: 0, holderRammen: true } };
+  return { altI, egen, blandet, avstaa: { nv: 0, netto: 0, behov: 0, holderRammen: true, laan: 0, rentekostnad: 0, nvEtterRente: 0, maanederMedLaan: 0 } };
 }
 
 /** Dyp kopi uten funksjoner, til lagring og «tilbake til casen». */

@@ -99,3 +99,18 @@ test("alt i A bytter til sittende der A ikke har ståoppsett", () => {
   assert.ok(r.perKonsert.every(k => k.mulig));
   assert.equal(r.perKonsert.filter(k => k.kappet).length, 6);
 });
+
+test("lån ut over rammen: B i basis trenger 66 100 kr i tre måneder, rente 12 % gir 1 559 kr", () => {
+  const { altI } = alle();
+  assert.equal(r0(altI.B.laan), 66100);
+  assert.equal(altI.B.maanederMedLaan, 3);
+  assert.deepEqual(altI.B.trekk.map(r0), [0, 38300, 51500, 66100, 0, 0, 0, 0]);
+  assert.equal(r0(altI.B.rentekostnad), 1559);            // (38 300 + 51 500 + 66 100) × 0,12 / 12
+  assert.ok(altI.B.nvEtterRente < altI.B.nv && altI.B.nvEtterRente > altI.B.nv - 1559);
+  assert.equal(altI.C.laan, 0);
+  assert.equal(altI.C.rentekostnad, 0);
+  assert.equal(r0(altI.C.nvEtterRente), r0(altI.C.nv));
+  const samlet = alle({ etterspoerselsfaktor: 0.8, pakke: 66000 }).altI;
+  assert.equal(r0(samlet.B.laan), 164120);
+  assert.equal(samlet.B.maanederMedLaan, 5);
+});

@@ -107,9 +107,8 @@ function render() {
 function statusTekst(r) {
   const s = state.data.sesong;
   if (s.ramme == null) return h("span", { class: "status svak" }, "Ingen ramme satt");
-  return r.behov <= s.ramme
-    ? h("span", { class: "status pluss" }, `Holder rammen, ${kr(s.ramme - r.behov)} til gode`)
-    : h("span", { class: "status minus" }, `Over rammen med ${kr(r.behov - s.ramme)}`);
+  if (r.behov <= s.ramme) return h("span", { class: "status pluss" }, `Holder rammen, ${kr(s.ramme - r.behov)} til gode`);
+  return h("span", { class: "status minus" }, `Over rammen med ${kr(r.behov - s.ramme)}. Lån i ${r.maanederMedLaan} ${r.maanederMedLaan === 1 ? "måned" : "måneder"} koster ca. ${kr(r.rentekostnad)} i rente`);
 }
 
 function renderStripe(res) {
@@ -231,11 +230,16 @@ function renderResultater(main, res) {
     h("dl", {},
       h("dt", {}, "Nåverdi"), h("dd", { class: `stor ${r.nv < 0 ? "minus" : ""}` }, kr(r.nv)),
       h("dt", {}, "Netto, udiskontert"), h("dd", {}, kr(r.netto)),
-      h("dt", {}, "Trenger underveis"), h("dd", {}, kr(r.behov))),
+      h("dt", {}, "Trenger underveis"), h("dd", {}, kr(r.behov)),
+      ...(r.laan > 0 ? [
+        h("dt", {}, "Lån ut over rammen"), h("dd", { class: "minus" }, kr(r.laan)),
+        h("dt", {}, `Rente, ${pst(state.data.sesong.laanRente ?? 0)} p.a.`), h("dd", { class: "minus" }, kr(r.rentekostnad)),
+        h("dt", {}, "Nåverdi etter rente"), h("dd", {}, kr(r.nvEtterRente)),
+      ] : [])),
     statusTekst(r));
   main.append(h("section", { class: "seksjon" },
     h("h2", {}, "Hele sesongen"),
-    h("p", { class: "ingress" }, "Nåverdi med 4 % realrente per år, og det største beløpet Sceneskift ligger ute med underveis, målt ved månedsslutt. Avstå gir null i begge."),
+    h("p", { class: "ingress" }, "Nåverdi med 4 % realrente per år, og det største beløpet Sceneskift ligger ute med underveis, målt ved månedsslutt. Avstå gir null i begge. Ligger behovet over rammen, vises lånet som trengs (det saldoen ligger under rammen, som en kassekreditt) og renten på det. Renten holdes utenfor nåverdien, slik casen krever, og vises som egen linje."),
     h("div", { class: "kort-rad" },
       kort("Egen plan", "gronn", res.egen, res.blandet ? h("span", { class: "merke varsel" }, "utenfor casen") : null),
       ...d.saler.map(x => kort(`Alt i ${salTittel(x)}`, fargeFor(x), res.altI[x.id])),
@@ -275,7 +279,8 @@ function renderResultater(main, res) {
     h("p", { class: "ingress" }, "Start er like før første konsertmåned og diskonteres ikke. Billettoppgjøret kommer måneden etter konserten, leie etter salens vilkår. Følg et tall herfra til stripa øverst."),
     h("div", { class: "tabellramme" }, h("table", { class: "kontantstrom" },
       h("thead", {}, h("tr", {}, h("th", {}, "Kroner"), ...etiketter.map(e => h("th", { class: "hoyre" }, e)))),
-      h("tbody", {}, rad("Billettoppgjør", L.billetter), rad("Publikumsutgift", L.utgift), rad("Pakke", L.pakke), rad("Leie", L.leie), rad("Sum i måneden", res.egen.cf), rad("Saldo", res.egen.saldo, "saldo"))))));
+      h("tbody", {}, rad("Billettoppgjør", L.billetter), rad("Publikumsutgift", L.utgift), rad("Pakke", L.pakke), rad("Leie", L.leie), rad("Sum i måneden", res.egen.cf), rad("Saldo", res.egen.saldo, "saldo"),
+        ...(res.egen.laan > 0 ? [rad("Under rammen, lån", res.egen.trekk.map(x => -x)), rad("Rente på lånet", res.egen.renter.map(x => -x))] : []))))));
 }
 
 function padTil(arr, n) { const ut = arr.slice(); while (ut.length < n) ut.push(ut[ut.length - 1]); return ut; }
@@ -398,6 +403,7 @@ function renderForutsetninger(main) {
     ["rente", "Realrente per år", "%", "Oppgaveteksten: 4 % real årsrente", { step: 0.5, pst: true }],
     ["ramme", "Startfinansiering, ramme", "kr", "Maja tror hun kan skaffe 250 000 kr, ikke avklart", { step: 10000 }],
     ["etterspoerselsfaktor", "Etterspørsel i forhold til 2026", "%", "Majas premiss er 100 %. Samme glider som i Resultater", { step: 5, pst: true }],
+    ["laanRente", "Rente på lån ut over rammen, per år", "%", "Gruppas antakelse (29.10.2026): kassekreditt uten sikkerhet. Ikke fra casen. Renten holdes utenfor nåverdien", { step: 1, pst: true }],
   ];
   const boks = h("div", { class: "forutsetninger" },
     h("div", { class: "rad hode" }, h("span", {}, "Forutsetning"), h("span", { class: "hoyre" }, "Verdi"), h("span", {}, "Enhet"), h("span", {}, "Kilde"), h("span")));

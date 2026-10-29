@@ -16,6 +16,7 @@ export const SESONG_2027 = {
   konvensjon: "aar",         // (1 + r)^(t/12). "maaned" gir (1 + r/12)^t
   ramme: 250000,             // startfinansiering Maja tror hun kan skaffe
   etterspoerselsfaktor: 1,   // 1 = Majas premiss: samme salg som 2026
+  laanRente: 0.12,           // årlig rente på lån ut over rammen (kassekreditt). Gruppas antakelse, ikke fra casen
   maanedsnavn: ["Før januar", "Januar", "Februar", "Mars", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Desember"],
 };
 
