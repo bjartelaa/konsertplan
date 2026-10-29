@@ -270,29 +270,37 @@ const SALER_2027 = [
   },
 ];
 
-// Programmet fra program.html, 2026-salget fra ordrene (K01 til K12 i samme rekkefølge).
+// Programmet fra program.html, 2026-salget fra ordrene (K01 til K12 i samme rekkefølge),
+// og tilsvarende konsert i 2026 fra arkiv.html og oppgjørsfila (navn, lokale, total kapasitet).
+// Verkstedet (320) og Maskinhallen (550) er lokalene Sceneskift brukte i 2026.
 const P = [
-  [1, "15.01", "June Varde", "Indiefolk", 1, 140],
-  [2, "29.01", "Mellomlys", "Drømmepop", 1, 190],
-  [3, "12.02", "Liv Eik", "Nordisk soul", 2, 230],
-  [4, "26.02", "Blåtimekvartetten", "Jazz", 2, 310],
-  [5, "12.03", "Ravlinje", "Elektronika", 3, 370],
-  [6, "26.03", "Vesperhagen", "Alternativ pop", 3, 480],
-  [7, "09.04", "Iben Vår", "Visepop", 4, 160],
-  [8, "23.04", "Sølvregn", "Shoegaze", 4, 250],
-  [9, "07.05", "Dobbeltspor", "Indierock", 5, 330],
-  [10, "28.05", "Nattfiol", "Synthpop", 5, 420],
-  [11, "11.06", "Ada Mørk", "Soul / jazz", 6, 210],
-  [12, "25.06", "Glassmorgen", "Elektronisk pop", 6, 290],
+  [1, "15.01", "June Varde", "Indiefolk", "Solo, gitar", 1, 140, "Låtskriverkveld", "Verkstedet", 320],
+  [2, "29.01", "Mellomlys", "Drømmepop", "Duo, gitar og synther", 1, 190, "To stemmer", "Verkstedet", 320],
+  [3, "12.02", "Liv Eik", "Nordisk soul", "Band, tangenter, bass og trommer", 2, 230, "Soul på verkstedet", "Verkstedet", 320],
+  [4, "26.02", "Blåtimekvartetten", "Jazz", "Kvartett", 2, 310, "Fredagsjazz", "Maskinhallen", 550],
+  [5, "12.03", "Ravlinje", "Elektronika", "Duo, synther og trommemaskiner", 3, 370, "Elektronisk vår", "Maskinhallen", 550],
+  [6, "26.03", "Vesperhagen", "Alternativ pop", "Femmannsband", 3, 480, "Pop i hallen", "Maskinhallen", 550],
+  [7, "09.04", "Iben Vår", "Visepop", "Solo, piano og gitar", 4, 160, "Nære viser", "Verkstedet", 320],
+  [8, "23.04", "Sølvregn", "Shoegaze", "Band, to gitarer, bass og trommer", 4, 250, "Gitarer i skumringen", "Verkstedet", 320],
+  [9, "07.05", "Dobbeltspor", "Indierock", "Band, to vokalister", 5, 330, "Bandfredag", "Maskinhallen", 550],
+  [10, "28.05", "Nattfiol", "Synthpop", "Trio, vokal, synther og elektroniske trommer", 5, 420, "Synthnatt", "Maskinhallen", 550],
+  [11, "11.06", "Ada Mørk", "Soul / jazz", "Vokal med trio", 6, 210, "Soul i juni", "Verkstedet", 320],
+  [12, "25.06", "Glassmorgen", "Elektronisk pop", "Duo, vokal, keyboard og elektronikk", 6, 290, "Vårens siste tone", "Maskinhallen", 550],
 ];
 
-const PROGRAM_2027 = P.map(([nr, dato, artist, sjanger, maaned, salg2026]) => ({
-  nr, dato, artist, sjanger, maaned, salg2026,
+const PROGRAM_2027 = P.map(([nr, dato, artist, sjanger, besetning, maaned, salg2026, navn2026, lokale2026, kap2026]) => ({
+  nr, dato, artist, sjanger, besetning, maaned, salg2026,
+  i2026: { navn: navn2026, lokale: lokale2026, kapasitet: kap2026 },
   forventetSalg: salg2026,
   salId: "C",            // casens råd som utgangspunkt
   oppsett: "staa",
   notat: nr === 6 ? "«Vårens største navn» ifølge Sceneskift" : "",
 }));
+
+const LOKALER_2026 = [
+  { navn: "Verkstedet", kapasitet: 320, beskrivelse: "Lyst rom med spor av det gamle seilloftet, lav scene. Ligner Lune Sal i størrelse og stemning." },
+  { navn: "Maskinhallen", kapasitet: 550, beskrivelse: "Takhøyde, mørke flater, plass til store lydlandskap. Ligner Skarvkaien." },
+];
 
 const SJANGRE = [
   "Indiefolk", "Drømmepop", "Nordisk soul", "Jazz", "Elektronika", "Alternativ pop",
@@ -500,7 +508,11 @@ function reparer() {
   if (!d.saler.length) d.saler = kopi(SALER_2027);
   for (const s of d.saler) { s.leie ??= []; s.kapasitet ??= { staa: null, sitte: null }; s.farge ??= "graa"; }
   const perKonsert = salerPerKonsert();
+  const standardProgram = standardSesong().program;
   for (const k of d.program) {
+    // Felt som er kommet til senere, hentes fra standardprogrammet når konserten er den samme
+    const std = standardProgram.find(x => x.nr === k.nr && x.artist === k.artist);
+    if (std) { k.i2026 ??= std.i2026; k.besetning ??= std.besetning; }
     k.oppsett ??= "staa";
     k.forventetSalg ??= k.salg2026 ?? 0;
     let s = salAv(k.salId);
@@ -596,12 +608,14 @@ function radForKonsert(k, i, r, perKonsert) {
   return h("tr", {},
     h("td", { class: "nr" }, String(k.nr)),
     h("td", {}, h("input", { type: "text", value: k.dato ?? "", size: 5, "aria-label": "Dato", onchange: e => endre("dato", e.target.value) })),
-    h("td", { class: "artist" }, h("input", { type: "text", value: k.artist ?? "", "aria-label": "Artist", onchange: e => endre("artist", e.target.value) })),
+    h("td", { class: "artist" }, h("input", { type: "text", value: k.artist ?? "", "aria-label": "Artist", onchange: e => endre("artist", e.target.value) }),
+      k.besetning ? h("div", { class: "liten svak" }, k.besetning) : null),
     h("td", { class: "sjanger" }, h("select", { "aria-label": "Sjanger", onchange: e => endre("sjanger", e.target.value) },
       ...[...new Set([...SJANGRE, k.sjanger].filter(Boolean))].map(s => h("option", { value: s, selected: s === k.sjanger }, s)))),
     h("td", { class: "salg hoyre" },
       h("input", { type: "number", min: 0, step: 10, value: k.forventetSalg, "aria-label": "Forventet salg", onchange: e => endre("forventetSalg", Math.max(0, Number(e.target.value) || 0)) }),
-      k.salg2026 != null ? h("div", { class: `liten ${avvik ? "" : "svak"}` }, avvik ? h("button", { type: "button", class: "stille liten", onclick: () => endre("forventetSalg", k.salg2026) }, `2026: ${tall(k.salg2026)}`) : `2026: ${tall(k.salg2026)}`) : null),
+      k.salg2026 != null ? h("div", { class: `liten ${avvik ? "" : "svak"}` }, avvik ? h("button", { type: "button", class: "stille liten", onclick: () => endre("forventetSalg", k.salg2026) }, `2026: ${tall(k.salg2026)}`) : `2026: ${tall(k.salg2026)}`) : null,
+      k.i2026 ? h("div", { class: "liten svak", title: `Tilsvarende konsert i 2026: ${k.i2026.navn}, ${k.i2026.lokale} med ${k.i2026.kapasitet} plasser i alt` }, `${k.i2026.navn}, ${k.i2026.lokale} (${k.i2026.kapasitet})`) : null),
     h("td", {}, h("div", { class: "oppsett-valg" }, oppsettKnapp("sitte", "Sitte"), oppsettKnapp("staa", "Stå"))),
     h("td", {}, h("div", { class: "salvalg", style: `--c: var(--${fargeFor(sal)})` },
       h("select", { "aria-label": "Sal", onchange: e => { const s = salAv(e.target.value); k.salId = s.id; if (kapasitet(s, k.oppsett) === null) k.oppsett = k.oppsett === "sitte" ? "staa" : "sitte"; oppdater(); } },
@@ -714,6 +728,15 @@ function renderSaler(main, res) {
   for (const s of d.saler) liste.append(salKort(s, res));
   sek.append(liste);
   main.append(sek);
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, "Lokalene i 2026, til sammenligning"),
+    h("p", { class: "ingress" }, "Sceneskift delte 2026 mellom to rom (arkivet på nettsiden og oppgjørsfila). De seks minste konsertene gikk i Verkstedet, de seks største i Maskinhallen. Tallene er total publikumskapasitet inkludert fribilletter, ikke salgbare plasser. Ingen konsert var full: høyest var konsert 6 med 480 av 550."),
+    h("div", { class: "kort-rad" }, ...LOKALER_2026.map(l => h("div", { class: "kort", style: "--c: var(--graa)" },
+      h("h3", {}, l.navn),
+      h("dl", {}, h("dt", {}, "Total kapasitet"), h("dd", {}, String(l.kapasitet)),
+        h("dt", {}, "Konserter i 2026"), h("dd", {}, String(d.program.filter(k => k.i2026?.lokale === l.navn).length)),
+        h("dt", {}, "Solgte, snitt"), h("dd", {}, (() => { const ks = d.program.filter(k => k.i2026?.lokale === l.navn && k.salg2026 != null); return ks.length ? tall(ks.reduce((a, k) => a + k.salg2026, 0) / ks.length) : "0"; })())),
+      h("p", { class: "notat" }, l.beskrivelse))))));
 }
 
 function salKort(s, res) {

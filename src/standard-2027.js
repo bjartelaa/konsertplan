@@ -52,29 +52,37 @@ export const SALER_2027 = [
   },
 ];
 
-// Programmet fra program.html, 2026-salget fra ordrene (K01 til K12 i samme rekkefølge).
+// Programmet fra program.html, 2026-salget fra ordrene (K01 til K12 i samme rekkefølge),
+// og tilsvarende konsert i 2026 fra arkiv.html og oppgjørsfila (navn, lokale, total kapasitet).
+// Verkstedet (320) og Maskinhallen (550) er lokalene Sceneskift brukte i 2026.
 const P = [
-  [1, "15.01", "June Varde", "Indiefolk", 1, 140],
-  [2, "29.01", "Mellomlys", "Drømmepop", 1, 190],
-  [3, "12.02", "Liv Eik", "Nordisk soul", 2, 230],
-  [4, "26.02", "Blåtimekvartetten", "Jazz", 2, 310],
-  [5, "12.03", "Ravlinje", "Elektronika", 3, 370],
-  [6, "26.03", "Vesperhagen", "Alternativ pop", 3, 480],
-  [7, "09.04", "Iben Vår", "Visepop", 4, 160],
-  [8, "23.04", "Sølvregn", "Shoegaze", 4, 250],
-  [9, "07.05", "Dobbeltspor", "Indierock", 5, 330],
-  [10, "28.05", "Nattfiol", "Synthpop", 5, 420],
-  [11, "11.06", "Ada Mørk", "Soul / jazz", 6, 210],
-  [12, "25.06", "Glassmorgen", "Elektronisk pop", 6, 290],
+  [1, "15.01", "June Varde", "Indiefolk", "Solo, gitar", 1, 140, "Låtskriverkveld", "Verkstedet", 320],
+  [2, "29.01", "Mellomlys", "Drømmepop", "Duo, gitar og synther", 1, 190, "To stemmer", "Verkstedet", 320],
+  [3, "12.02", "Liv Eik", "Nordisk soul", "Band, tangenter, bass og trommer", 2, 230, "Soul på verkstedet", "Verkstedet", 320],
+  [4, "26.02", "Blåtimekvartetten", "Jazz", "Kvartett", 2, 310, "Fredagsjazz", "Maskinhallen", 550],
+  [5, "12.03", "Ravlinje", "Elektronika", "Duo, synther og trommemaskiner", 3, 370, "Elektronisk vår", "Maskinhallen", 550],
+  [6, "26.03", "Vesperhagen", "Alternativ pop", "Femmannsband", 3, 480, "Pop i hallen", "Maskinhallen", 550],
+  [7, "09.04", "Iben Vår", "Visepop", "Solo, piano og gitar", 4, 160, "Nære viser", "Verkstedet", 320],
+  [8, "23.04", "Sølvregn", "Shoegaze", "Band, to gitarer, bass og trommer", 4, 250, "Gitarer i skumringen", "Verkstedet", 320],
+  [9, "07.05", "Dobbeltspor", "Indierock", "Band, to vokalister", 5, 330, "Bandfredag", "Maskinhallen", 550],
+  [10, "28.05", "Nattfiol", "Synthpop", "Trio, vokal, synther og elektroniske trommer", 5, 420, "Synthnatt", "Maskinhallen", 550],
+  [11, "11.06", "Ada Mørk", "Soul / jazz", "Vokal med trio", 6, 210, "Soul i juni", "Verkstedet", 320],
+  [12, "25.06", "Glassmorgen", "Elektronisk pop", "Duo, vokal, keyboard og elektronikk", 6, 290, "Vårens siste tone", "Maskinhallen", 550],
 ];
 
-export const PROGRAM_2027 = P.map(([nr, dato, artist, sjanger, maaned, salg2026]) => ({
-  nr, dato, artist, sjanger, maaned, salg2026,
+export const PROGRAM_2027 = P.map(([nr, dato, artist, sjanger, besetning, maaned, salg2026, navn2026, lokale2026, kap2026]) => ({
+  nr, dato, artist, sjanger, besetning, maaned, salg2026,
+  i2026: { navn: navn2026, lokale: lokale2026, kapasitet: kap2026 },
   forventetSalg: salg2026,
   salId: "C",            // casens råd som utgangspunkt
   oppsett: "staa",
   notat: nr === 6 ? "«Vårens største navn» ifølge Sceneskift" : "",
 }));
+
+export const LOKALER_2026 = [
+  { navn: "Verkstedet", kapasitet: 320, beskrivelse: "Lyst rom med spor av det gamle seilloftet, lav scene. Ligner Lune Sal i størrelse og stemning." },
+  { navn: "Maskinhallen", kapasitet: 550, beskrivelse: "Takhøyde, mørke flater, plass til store lydlandskap. Ligner Skarvkaien." },
+];
 
 export const SJANGRE = [
   "Indiefolk", "Drømmepop", "Nordisk soul", "Jazz", "Elektronika", "Alternativ pop",

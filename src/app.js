@@ -1,7 +1,7 @@
 // Konsertplan: tilstand og rendering. Alt regnes på nytt ved hver endring.
 import { beregnAlle, kapasitet, kopi, fastLeieSum } from "./motor.js";
 import { forslagForKonsert } from "./forslag.js";
-import { SESONG_2027, SALER_2027, SJANGRE, standardSesong } from "./standard-2027.js";
+import { SESONG_2027, SALER_2027, SJANGRE, LOKALER_2026, standardSesong } from "./standard-2027.js";
 import { lesLokalt, lagreLokalt, slettLokalt, lastNedFil, lesFil } from "./lagring.js";
 import { tegnSaldo, tegnBidrag } from "./figurer.js";
 
@@ -73,7 +73,11 @@ function reparer() {
   if (!d.saler.length) d.saler = kopi(SALER_2027);
   for (const s of d.saler) { s.leie ??= []; s.kapasitet ??= { staa: null, sitte: null }; s.farge ??= "graa"; }
   const perKonsert = salerPerKonsert();
+  const standardProgram = standardSesong().program;
   for (const k of d.program) {
+    // Felt som er kommet til senere, hentes fra standardprogrammet når konserten er den samme
+    const std = standardProgram.find(x => x.nr === k.nr && x.artist === k.artist);
+    if (std) { k.i2026 ??= std.i2026; k.besetning ??= std.besetning; }
     k.oppsett ??= "staa";
     k.forventetSalg ??= k.salg2026 ?? 0;
     let s = salAv(k.salId);
@@ -169,12 +173,14 @@ function radForKonsert(k, i, r, perKonsert) {
   return h("tr", {},
     h("td", { class: "nr" }, String(k.nr)),
     h("td", {}, h("input", { type: "text", value: k.dato ?? "", size: 5, "aria-label": "Dato", onchange: e => endre("dato", e.target.value) })),
-    h("td", { class: "artist" }, h("input", { type: "text", value: k.artist ?? "", "aria-label": "Artist", onchange: e => endre("artist", e.target.value) })),
+    h("td", { class: "artist" }, h("input", { type: "text", value: k.artist ?? "", "aria-label": "Artist", onchange: e => endre("artist", e.target.value) }),
+      k.besetning ? h("div", { class: "liten svak" }, k.besetning) : null),
     h("td", { class: "sjanger" }, h("select", { "aria-label": "Sjanger", onchange: e => endre("sjanger", e.target.value) },
       ...[...new Set([...SJANGRE, k.sjanger].filter(Boolean))].map(s => h("option", { value: s, selected: s === k.sjanger }, s)))),
     h("td", { class: "salg hoyre" },
       h("input", { type: "number", min: 0, step: 10, value: k.forventetSalg, "aria-label": "Forventet salg", onchange: e => endre("forventetSalg", Math.max(0, Number(e.target.value) || 0)) }),
-      k.salg2026 != null ? h("div", { class: `liten ${avvik ? "" : "svak"}` }, avvik ? h("button", { type: "button", class: "stille liten", onclick: () => endre("forventetSalg", k.salg2026) }, `2026: ${tall(k.salg2026)}`) : `2026: ${tall(k.salg2026)}`) : null),
+      k.salg2026 != null ? h("div", { class: `liten ${avvik ? "" : "svak"}` }, avvik ? h("button", { type: "button", class: "stille liten", onclick: () => endre("forventetSalg", k.salg2026) }, `2026: ${tall(k.salg2026)}`) : `2026: ${tall(k.salg2026)}`) : null,
+      k.i2026 ? h("div", { class: "liten svak", title: `Tilsvarende konsert i 2026: ${k.i2026.navn}, ${k.i2026.lokale} med ${k.i2026.kapasitet} plasser i alt` }, `${k.i2026.navn}, ${k.i2026.lokale} (${k.i2026.kapasitet})`) : null),
     h("td", {}, h("div", { class: "oppsett-valg" }, oppsettKnapp("sitte", "Sitte"), oppsettKnapp("staa", "Stå"))),
     h("td", {}, h("div", { class: "salvalg", style: `--c: var(--${fargeFor(sal)})` },
       h("select", { "aria-label": "Sal", onchange: e => { const s = salAv(e.target.value); k.salId = s.id; if (kapasitet(s, k.oppsett) === null) k.oppsett = k.oppsett === "sitte" ? "staa" : "sitte"; oppdater(); } },
@@ -287,6 +293,15 @@ function renderSaler(main, res) {
   for (const s of d.saler) liste.append(salKort(s, res));
   sek.append(liste);
   main.append(sek);
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, "Lokalene i 2026, til sammenligning"),
+    h("p", { class: "ingress" }, "Sceneskift delte 2026 mellom to rom (arkivet på nettsiden og oppgjørsfila). De seks minste konsertene gikk i Verkstedet, de seks største i Maskinhallen. Tallene er total publikumskapasitet inkludert fribilletter, ikke salgbare plasser. Ingen konsert var full: høyest var konsert 6 med 480 av 550."),
+    h("div", { class: "kort-rad" }, ...LOKALER_2026.map(l => h("div", { class: "kort", style: "--c: var(--graa)" },
+      h("h3", {}, l.navn),
+      h("dl", {}, h("dt", {}, "Total kapasitet"), h("dd", {}, String(l.kapasitet)),
+        h("dt", {}, "Konserter i 2026"), h("dd", {}, String(d.program.filter(k => k.i2026?.lokale === l.navn).length)),
+        h("dt", {}, "Solgte, snitt"), h("dd", {}, (() => { const ks = d.program.filter(k => k.i2026?.lokale === l.navn && k.salg2026 != null); return ks.length ? tall(ks.reduce((a, k) => a + k.salg2026, 0) / ks.length) : "0"; })())),
+      h("p", { class: "notat" }, l.beskrivelse))))));
 }
 
 function salKort(s, res) {
