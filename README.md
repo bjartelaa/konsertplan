@@ -8,7 +8,7 @@ Sceneskift, salene og tallene er fiktive og laget for undervisning. Privat til e
 
 Dobbeltklikk `index.html`. Siden trenger ikke nett og ingen server. Alt regnes i nettleseren og lagres i nettleserens lokale lager på maskinen. «Lagre sesong» gir en JSON-fil som kan åpnes igjen med «Åpne sesong», også på en annen maskin.
 
-Fanene kan lenkes direkte: `index.html#program`, `#resultater`, `#saler`, `#forutsetninger`.
+Fanene kan lenkes direkte: `index.html#program`, `#resultater`, `#saler`, `#forutsetninger`. Åpnes siden fra presentasjonen (`index.html?fra=presentasjon#program`), vises «Tilbake til presentasjonen» øverst. Lenken går til `../sceneskift-kart/site/index.html`, så de to repoene må ligge i samme mappe. Uten `?fra=presentasjon` er lenken skjult.
 
 ## Sceneskift 2027 er utgangspunktet
 
