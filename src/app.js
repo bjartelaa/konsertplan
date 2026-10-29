@@ -1,6 +1,6 @@
 // Konsertplan: tilstand og rendering. Alt regnes på nytt ved hver endring.
 import { beregnAlle, kapasitet, kopi } from "./motor.js";
-import { forslagForKonsert } from "./forslag.js";
+import { forslagForKonsert, besteBlanding } from "./forslag.js";
 import { SESONG_2027, SALER_2027, SJANGRE, LOKALER_2026, standardSesong } from "./standard-2027.js";
 import { lesLokalt, lagreLokalt, slettLokalt, lastNedFil, lesFil } from "./lagring.js";
 import { tegnSaldo, tegnBidrag } from "./figurer.js";
@@ -31,7 +31,7 @@ const svg = (label) => { const e = document.createElementNS("http://www.w3.org/2
 /** Forklarende tekst som bare vises når bryteren «Forklaringer» er på. */
 const fork = (tag, cls, ...barn) => h(tag, { class: `${cls} forklaring-tekst` }, ...barn);
 
-const state = { data: null, fane: "program", referanse: "C", forklar: false };
+const state = { data: null, fane: "program", referanse: "C", forklar: false, besteBlanding: null };
 
 function salAv(id) { return state.data.saler.find(s => s.id === id); }
 function salerPerKonsert() { return state.data.saler.filter(s => !s.kunHelSesong); }
@@ -79,7 +79,10 @@ function init() {
   if (new URLSearchParams(location.search).get("fra") === "presentasjon") {
     const tilbake = document.getElementById("til-presentasjon");
     tilbake.hidden = false;
-    tilbake.addEventListener("click", e => { if (history.length > 1) { e.preventDefault(); history.back(); } });
+    // ?tilbake=slutt går rett til den siden i presentasjonen, ellers tilbake dit vi kom fra
+    const til = new URLSearchParams(location.search).get("tilbake");
+    if (til) tilbake.href = tilbake.href.replace(/#.*$/, "") + "#" + encodeURIComponent(til);
+    else tilbake.addEventListener("click", e => { if (history.length > 1) { e.preventDefault(); history.back(); } });
   }
   visForklaringer();
   render();
@@ -133,7 +136,7 @@ function render() {
 function statusTekst(r) {
   const s = state.data.sesong;
   if (s.ramme == null) return h("span", { class: "status svak" }, "Ingen ramme satt");
-  if (r.behov <= s.ramme) return h("span", { class: "status pluss" }, `Holder rammen, ${kr(s.ramme - r.behov)} til gode`);
+  if (r.behov <= s.ramme) return h("span", { class: "status pluss" }, `Holder rammen, ${kr(s.ramme - r.behov)} å gå på`);
   return h("span", { class: "status minus" }, `${kr(r.behov - s.ramme)} over rammen. Lån i ${r.maanederMedLaan} ${r.maanederMedLaan === 1 ? "måned" : "måneder"}, ca. ${kr(r.rentekostnad)} i rente`);
 }
 
@@ -169,6 +172,18 @@ function renderStripe(res) {
 }
 
 /* ---------- Program ---------- */
+// Merknaden etter «Beste blanding» gjelder så lenge programmet er som da knappen ble trykket
+const blandingNokkel = () => JSON.stringify(state.data.program.map(k => [k.salId, k.oppsett, k.forventetSalg]));
+function merknadBesteBlanding(r) {
+  if (!state.besteBlanding || state.besteBlanding !== blandingNokkel()) return null;
+  const ramme = state.data.sesong.ramme;
+  const over = ramme != null && r.behov > ramme;
+  if (over && r.nv <= 0) return `Ingen blanding holder rammen med dette salget. Beste blanding går ${kr(r.behov - ramme)} over rammen og har negativ nåverdi (${kr(r.nv)}). Avstå er bedre.`;
+  if (over) return `Ingen blanding holder rammen med dette salget. Beste blanding har høyest nåverdi, men går ${kr(r.behov - ramme)} over rammen.`;
+  if (r.nv <= 0) return `Beste blanding holder rammen, men har negativ nåverdi (${kr(r.nv)}). Avstå er bedre.`;
+  return null;
+}
+
 function renderProgram(main, res) {
   const d = state.data;
   const perKonsert = salerPerKonsert();
@@ -179,10 +194,14 @@ function renderProgram(main, res) {
 
   sek.append(h("div", { class: "verktoylinje" },
     h("button", { type: "button", onclick: () => { for (const k of d.program) { const f = forslagForKonsert(d.sesong, d.saler, k); if (f) { k.salId = f.salId; k.oppsett = f.oppsett; } } oppdater(); } }, "Bruk forslagene på alle"),
+    h("button", { type: "button", title: "Den kombinasjonen av saler per konsert som gir høyest nåverdi og holder rammen", onclick: () => { const b = besteBlanding(d.sesong, d.saler, d.program); if (b) { d.program.forEach((k, i) => { k.salId = b.valg[i].salId; k.oppsett = b.valg[i].oppsett; }); state.besteBlanding = blandingNokkel(); oppdater(); } } }, "Beste blanding"),
     h("button", { type: "button", class: "stille", onclick: () => { for (const k of d.program) k.forventetSalg = k.salg2026 ?? k.forventetSalg; oppdater(); } }, "Salg som i 2026"),
     ...perKonsert.map(s => h("button", { type: "button", class: "stille", onclick: () => { for (const k of d.program) { k.salId = s.id; if (kapasitet(s, k.oppsett) === null) k.oppsett = k.oppsett === "sitte" ? "staa" : "sitte"; } oppdater(); } }, `Alle i ${s.kort ?? s.navn}`)),
     h("span", { class: "mellomrom" }),
     h("button", { type: "button", onclick: () => leggTilKonsert() }, "Legg til konsert")));
+
+  const merknad = merknadBesteBlanding(res.egen);
+  if (merknad) sek.append(h("p", { class: "varsel", style: "margin-top: 14px" }, merknad));
 
   const hode = h("tr", {},
     h("th", {}, "Nr"), h("th", {}, "Dato"), h("th", {}, "Artist"), h("th", {}, "Sjanger"), h("th", { class: "hoyre" }, "Forventet salg"),

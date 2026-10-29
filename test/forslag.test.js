@@ -32,3 +32,34 @@ test("forslagene på alle konsertene gir høyere nåverdi enn alt i C", async ()
   assert.ok(r.egen.nv > r.altI.C.nv, `egen ${r.egen.nv} mot C ${r.altI.C.nv}`);
   assert.ok(r.egen.netto - r.altI.C.netto > 15000);
 });
+
+test("beste blanding av A og C holder rammen og slår alt i C", async () => {
+  const { besteBlanding } = await import("../src/forslag.js");
+  const d = standardSesong();
+  const b = besteBlanding(d.sesong, d.saler, d.program);
+  assert.equal(b.valg.map(v => v.salId).join(""), "CAACCCAACCAC");
+  assert.equal(Math.round(b.nv), 192021);
+  assert.equal(Math.round(b.behov), 223068);
+  assert.equal(b.holderRammen, true);
+});
+
+test("beste blanding med B frigjort: sesongleien gjør at B ikke velges", async () => {
+  const { besteBlanding } = await import("../src/forslag.js");
+  const d = standardSesong();
+  d.saler.find(s => s.id === "B").kunHelSesong = false;
+  const b = besteBlanding(d.sesong, d.saler, d.program);
+  assert.equal(b.valg.map(v => v.salId).join(""), "CAACCCAACCAC");
+  assert.equal(Math.round(b.nv), 192021);
+});
+
+test("beste blanding med B til 15 000 per konsert blander A, B og C (kontrollert mot alle 531 441 kombinasjoner)", async () => {
+  const { besteBlanding } = await import("../src/forslag.js");
+  const d = standardSesong();
+  const B = d.saler.find(s => s.id === "B");
+  B.kunHelSesong = false;
+  B.leie = [{ type: "perKonsert", belop: 15000, naar: "konsertmaaned" }];
+  const b = besteBlanding(d.sesong, d.saler, d.program);
+  assert.equal(b.valg.map(v => v.salId).join(""), "CAABBBAABBAB");
+  assert.equal(Math.round(b.nv), 233863);
+  assert.equal(Math.round(b.behov), 238068);
+});

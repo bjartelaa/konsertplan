@@ -225,6 +225,75 @@ function forslagForKonsert(sesong, saler, konsert) {
 const krTekst = v => Math.round(v).toLocaleString("nb-NO") + " kr";
 const oppsettTekst = o => (o === "sitte" ? "Sittende" : "Stående");
 
+/**
+ * Beste blanding: den kombinasjonen av saler per konsert som gir høyest nåverdi og holder rammen.
+ * Hver sal får det oppsettet som gir høyest bidrag på konserten. Saler med kunHelSesong holdes utenfor.
+ * Med få saler prøves alle kombinasjonene (to saler og tolv konserter er 4 096). Med flere (tre saler er
+ * 531 441) starter søket fra flere utgangspunkt: alt i hver sal, høyest bidrag per konsert og beste blanding
+ * av salene uten fast leie. Derfra byttes sal på én konsert om gangen så lenge det blir bedre, regnet med
+ * hele motoren, så sesongleie og ramme er med. Returnerer { valg: [{ salId, oppsett }], nv, behov, holderRammen } eller null.
+ */
+function besteBlanding(sesong, saler, program) {
+  const kandidater = saler.filter(s => !s.kunHelSesong);
+  const margin = sesong.billettpris - sesong.gebyr - sesong.utgiftPerBillett;
+  const valgPerKonsert = program.map(k => kandidater.map(s => {
+    let best = null;
+    for (const oppsett of ["staa", "sitte"]) {
+      const b = billetter(sesong, k, s, oppsett);
+      if (!b.mulig) continue;
+      const bidrag = b.n * margin - leieForKonsert(sesong, s, b.n).sum;
+      if (!best || bidrag > best.bidrag) best = { salId: s.id, oppsett, bidrag };
+    }
+    return best;
+  }).filter(Boolean));
+  if (valgPerKonsert.some(v => v.length === 0)) return null;
+  const regn = valg => {
+    const p = beregnPlan(sesong, saler, program.map((k, i) => ({ ...k, salId: valg[i].salId, oppsett: valg[i].oppsett })), k => k.salId);
+    return { valg, nv: p.nv, behov: p.behov, holderRammen: p.holderRammen !== false };
+  };
+  const bedre = (a, b) => (a.holderRammen !== b.holderRammen ? a.holderRammen : a.nv > b.nv);
+  const alleKombinasjoner = valg => {
+    const antall = valg.reduce((a, v) => a * v.length, 1);
+    if (antall > 65536) return null;
+    let best = null;
+    const indeks = program.map(() => 0);
+    for (let n = 0; n < antall; n++) {
+      let rest = n;
+      for (let i = 0; i < program.length; i++) { indeks[i] = rest % valg[i].length; rest = Math.floor(rest / valg[i].length); }
+      const r = regn(valg.map((v, i) => v[indeks[i]]));
+      if (!best || bedre(r, best)) best = r;
+    }
+    return best;
+  };
+  const alle = alleKombinasjoner(valgPerKonsert);
+  if (alle) return alle;
+
+  // For mange kombinasjoner: flere utgangspunkt, så forbedring én konsert om gangen
+  const start = [valgPerKonsert.map(v => v.reduce((a, b) => (b.bidrag > a.bidrag ? b : a)))];
+  for (const s of kandidater) {
+    const alleI = valgPerKonsert.map(v => v.find(o => o.salId === s.id));
+    if (alleI.every(Boolean)) start.push(alleI);
+  }
+  const utenFast = valgPerKonsert.map(v => v.filter(o => fasteLeiebetalinger(kandidater.find(s => s.id === o.salId)).length === 0));
+  if (utenFast.every(v => v.length)) { const r = alleKombinasjoner(utenFast); if (r) start.push(r.valg); }
+  let best = null;
+  for (const valg of start) {
+    let naa = regn(valg), bedret = true;
+    while (bedret) {
+      bedret = false;
+      for (let i = 0; i < program.length; i++) {
+        for (const o of valgPerKonsert[i]) {
+          if (o === naa.valg[i]) continue;
+          const r = regn(naa.valg.map((v, j) => (j === i ? o : v)));
+          if (bedre(r, naa)) { naa = r; bedret = true; }
+        }
+      }
+    }
+    if (!best || bedre(naa, best)) best = naa;
+  }
+  return best;
+}
+
 
 // ---- src/standard-2027.js ----
 // Sceneskift våren 2027 slik casen i MET3 AK2 beskriver den. Dette er utgangspunktet i alt:
@@ -478,7 +547,7 @@ const svg = (label) => { const e = document.createElementNS("http://www.w3.org/2
 /** Forklarende tekst som bare vises når bryteren «Forklaringer» er på. */
 const fork = (tag, cls, ...barn) => h(tag, { class: `${cls} forklaring-tekst` }, ...barn);
 
-const state = { data: null, fane: "program", referanse: "C", forklar: false };
+const state = { data: null, fane: "program", referanse: "C", forklar: false, besteBlanding: null };
 
 function salAv(id) { return state.data.saler.find(s => s.id === id); }
 function salerPerKonsert() { return state.data.saler.filter(s => !s.kunHelSesong); }
@@ -526,7 +595,10 @@ function init() {
   if (new URLSearchParams(location.search).get("fra") === "presentasjon") {
     const tilbake = document.getElementById("til-presentasjon");
     tilbake.hidden = false;
-    tilbake.addEventListener("click", e => { if (history.length > 1) { e.preventDefault(); history.back(); } });
+    // ?tilbake=slutt går rett til den siden i presentasjonen, ellers tilbake dit vi kom fra
+    const til = new URLSearchParams(location.search).get("tilbake");
+    if (til) tilbake.href = tilbake.href.replace(/#.*$/, "") + "#" + encodeURIComponent(til);
+    else tilbake.addEventListener("click", e => { if (history.length > 1) { e.preventDefault(); history.back(); } });
   }
   visForklaringer();
   render();
@@ -580,7 +652,7 @@ function render() {
 function statusTekst(r) {
   const s = state.data.sesong;
   if (s.ramme == null) return h("span", { class: "status svak" }, "Ingen ramme satt");
-  if (r.behov <= s.ramme) return h("span", { class: "status pluss" }, `Holder rammen, ${kr(s.ramme - r.behov)} til gode`);
+  if (r.behov <= s.ramme) return h("span", { class: "status pluss" }, `Holder rammen, ${kr(s.ramme - r.behov)} å gå på`);
   return h("span", { class: "status minus" }, `${kr(r.behov - s.ramme)} over rammen. Lån i ${r.maanederMedLaan} ${r.maanederMedLaan === 1 ? "måned" : "måneder"}, ca. ${kr(r.rentekostnad)} i rente`);
 }
 
@@ -616,6 +688,18 @@ function renderStripe(res) {
 }
 
 /* ---------- Program ---------- */
+// Merknaden etter «Beste blanding» gjelder så lenge programmet er som da knappen ble trykket
+const blandingNokkel = () => JSON.stringify(state.data.program.map(k => [k.salId, k.oppsett, k.forventetSalg]));
+function merknadBesteBlanding(r) {
+  if (!state.besteBlanding || state.besteBlanding !== blandingNokkel()) return null;
+  const ramme = state.data.sesong.ramme;
+  const over = ramme != null && r.behov > ramme;
+  if (over && r.nv <= 0) return `Ingen blanding holder rammen med dette salget. Beste blanding går ${kr(r.behov - ramme)} over rammen og har negativ nåverdi (${kr(r.nv)}). Avstå er bedre.`;
+  if (over) return `Ingen blanding holder rammen med dette salget. Beste blanding har høyest nåverdi, men går ${kr(r.behov - ramme)} over rammen.`;
+  if (r.nv <= 0) return `Beste blanding holder rammen, men har negativ nåverdi (${kr(r.nv)}). Avstå er bedre.`;
+  return null;
+}
+
 function renderProgram(main, res) {
   const d = state.data;
   const perKonsert = salerPerKonsert();
@@ -626,10 +710,14 @@ function renderProgram(main, res) {
 
   sek.append(h("div", { class: "verktoylinje" },
     h("button", { type: "button", onclick: () => { for (const k of d.program) { const f = forslagForKonsert(d.sesong, d.saler, k); if (f) { k.salId = f.salId; k.oppsett = f.oppsett; } } oppdater(); } }, "Bruk forslagene på alle"),
+    h("button", { type: "button", title: "Den kombinasjonen av saler per konsert som gir høyest nåverdi og holder rammen", onclick: () => { const b = besteBlanding(d.sesong, d.saler, d.program); if (b) { d.program.forEach((k, i) => { k.salId = b.valg[i].salId; k.oppsett = b.valg[i].oppsett; }); state.besteBlanding = blandingNokkel(); oppdater(); } } }, "Beste blanding"),
     h("button", { type: "button", class: "stille", onclick: () => { for (const k of d.program) k.forventetSalg = k.salg2026 ?? k.forventetSalg; oppdater(); } }, "Salg som i 2026"),
     ...perKonsert.map(s => h("button", { type: "button", class: "stille", onclick: () => { for (const k of d.program) { k.salId = s.id; if (kapasitet(s, k.oppsett) === null) k.oppsett = k.oppsett === "sitte" ? "staa" : "sitte"; } oppdater(); } }, `Alle i ${s.kort ?? s.navn}`)),
     h("span", { class: "mellomrom" }),
     h("button", { type: "button", onclick: () => leggTilKonsert() }, "Legg til konsert")));
+
+  const merknad = merknadBesteBlanding(res.egen);
+  if (merknad) sek.append(h("p", { class: "varsel", style: "margin-top: 14px" }, merknad));
 
   const hode = h("tr", {},
     h("th", {}, "Nr"), h("th", {}, "Dato"), h("th", {}, "Artist"), h("th", {}, "Sjanger"), h("th", { class: "hoyre" }, "Forventet salg"),

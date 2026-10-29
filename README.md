@@ -8,13 +8,15 @@ Sceneskift, salene og tallene er fiktive og laget for undervisning. Privat til e
 
 Dobbeltklikk `index.html`. Siden trenger ikke nett og ingen server. Alt regnes i nettleseren og lagres i nettleserens lokale lager på maskinen. «Lagre sesong» gir en JSON-fil som kan åpnes igjen med «Åpne sesong», også på en annen maskin.
 
-Fanene kan lenkes direkte: `index.html#program`, `#resultater`, `#saler`, `#forutsetninger`. Åpnes siden fra presentasjonen (`index.html?fra=presentasjon#program`), vises «Tilbake til presentasjonen» øverst. Lenken går til `../sceneskift-kart/site/index.html`, så de to repoene må ligge i samme mappe. Uten `?fra=presentasjon` er lenken skjult.
+Fanene kan lenkes direkte: `index.html#program`, `#resultater`, `#saler`, `#forutsetninger`. Åpnes siden fra presentasjonen (`index.html?fra=presentasjon#program`), vises «Tilbake til presentasjonen» øverst. Lenken går til `../sceneskift-kart/site/index.html`, så de to repoene må ligge i samme mappe. Uten `?fra=presentasjon` er lenken skjult. Med `&tilbake=slutt` går lenken rett til den siden (`#slutt`, avslutningen) i stedet for tilbake i historikken.
 
 ## Sceneskift 2027 er utgangspunktet
 
 Siden åpner alltid med casen ferdig lagt inn: Majas forutsetninger, tilbudene fra Lune Sal (A), Søyleverket (B) og Skarvkaien (C), og de tolv konsertene med salget fra tilsvarende konsert i 2026. All redigering skjer oppå dette. Hvert felt kan settes tilbake til casen, og «Nullstill alt til Sceneskift 2027» henter alt på nytt.
 
 B har fast sesongleie og kan bare velges som hel sesong («Alt i B»). Blanding per konsert skjer mellom A og C og merkes «utenfor casen», fordi avtalene i casen gjelder hele programmet.
+
+«Beste blanding» i programmet velger den kombinasjonen av saler per konsert som gir høyest nåverdi og holder rammen (`besteBlanding` i `src/forslag.js`). Med A og C prøves alle 4 096 kombinasjonene. Med flere saler (for eksempel B uten «Kun hel sesong») er det for mange til å prøve alle. Da starter søket fra alt i hver sal, høyest bidrag per konsert og beste blanding av salene uten fast leie, og bytter sal på én og én konsert så lenge det blir bedre. Kontrollert mot alle 531 441 kombinasjoner for seks oppsett av B: samme svar i alle. For 2027 gir den C A A C C C A A C C A C: nåverdi 192 021 kr og behov 223 068 kr, mot 173 787 og 216 696 for alt i C. Holder ingen kombinasjon rammen, velges den med høyest nåverdi likevel, og programmet får en merknad om at den går over rammen (og at avstå er bedre når nåverdien er negativ). Merknaden blir borte når sal, oppsett eller salg endres.
 
 Sitteplasser er ikke oppgitt i tilbudene. B 250 og C 200 er antatt og merket slik. A regnes som sittende sal med 250 plasser (nettsiden sier 270 seter).
 
