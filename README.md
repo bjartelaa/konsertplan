@@ -22,6 +22,8 @@ Sitteplasser er ikke oppgitt i tilbudene. B 250 og C 200 er antatt og merket sli
 
 Fra oppgaveteksten og arbeidsboka `Sceneskift_AK2_modell.xlsx`. Per konsert i måned m med N betalte billetter: oppgjør N × (350 − 10) i måned m + 1, publikumsutgift N × 10 i måned m, pakke 30 000 måneden før og 30 000 i konsertmåneden. Leie etter salens byggeklosser: fast beløp per konsert, andel av oppgjøret med minimum, engangsbeløp, eller sesongleie med betalingsplan. Nåverdi med (1,04)^(t/12). Finansieringsbehov er laveste saldo ved månedsslutt.
 
+Lån ut over rammen (utvidelse): ligger behovet over rammen, regnes det som en kassekreditt på det saldoen ligger under rammen ved hvert månedsslutt, med rente per måned (12 % p.a. er gruppas antakelse, kan endres under Forutsetninger). Renten holdes utenfor nåverdien og vises som egen linje, sammen med nåverdi etter rente.
+
 Kontrolltallene (basis): nåverdi A 51 324, B 201 394, C 173 787 kr, behov A 231 900, B 316 100, C 216 696 kr. Testene i `test/` krever at motoren treffer disse på kronen.
 
 ## Filer
