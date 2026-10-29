@@ -23,7 +23,7 @@ export const SALER_2027 = [
   {
     id: "A", navn: "Lune Sal", kort: "A", farge: "blaa",
     beskrivelse: "Liten kultursal i et tidligere snekkerverksted. Lav scene, intimt.",
-    kilde: "https://alu042.github.io/met3-lune-sal/", bilde: "img/lune-sal.jpg",
+    kilde: "https://alu042.github.io/met3-lune-sal/", bilde: "img/lune-sal.webp",
     kapasitet: { staa: null, sitte: 250 }, sitteAntatt: false,
     kapasitetNotat: "Tilbudet: 250 salgbare plasser. Nettsiden sier 270 seter. Regnes som sittende sal uten ståoppsett (antatt).",
     kunHelSesong: false,
@@ -32,7 +32,7 @@ export const SALER_2027 = [
   {
     id: "B", navn: "Søyleverket", kort: "B", farge: "gul",
     beskrivelse: "Kulturrom med flatt gulv, fast scene og løse stoler. Fast sesongleie.",
-    kilde: "https://alu042.github.io/met3-soyleverket/", bilde: "img/soyleverket.jpg",
+    kilde: "https://alu042.github.io/met3-soyleverket/", bilde: "img/soyleverket.webp",
     kapasitet: { staa: 450, sitte: 250 }, sitteAntatt: true,
     kapasitetNotat: "Tilbudet: 450 salgbare plasser. Nettsiden sier inntil 500 personer. Sitteplasser 250 er antatt (løse stoler på flatt gulv).",
     kunHelSesong: true,
@@ -44,7 +44,7 @@ export const SALER_2027 = [
   {
     id: "C", navn: "Skarvkaien", kort: "C", farge: "rosa",
     beskrivelse: "Havnelager med fast scene og åpent gulv. Leien følger billettoppgjøret.",
-    kilde: "https://alu042.github.io/met3-skarvkaien/", bilde: "img/skarvkaien.jpg",
+    kilde: "https://alu042.github.io/met3-skarvkaien/", bilde: "img/skarvkaien.webp",
     kapasitet: { staa: 450, sitte: 200 }, sitteAntatt: true,
     kapasitetNotat: "Tilbudet: 450 salgbare plasser. Nettsiden sier inntil 490 stående. Sitteplasser 200 er antatt (kan rigges sittende).",
     kunHelSesong: false,

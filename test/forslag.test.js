@@ -22,3 +22,13 @@ test("forslag per konsert i 2027: A for små sittende, C for store stående", ()
   assert.equal(f(4).kappet, true);
   assert.ok(f(2).hvorfor.includes("Lune Sal"));
 });
+
+test("forslagene på alle konsertene gir høyere nåverdi enn alt i C", async () => {
+  const { beregnAlle } = await import("../src/motor.js");
+  const d = standardSesong();
+  for (const k of d.program) { const f = forslagForKonsert(d.sesong, d.saler, k); k.salId = f.salId; k.oppsett = f.oppsett; }
+  const r = beregnAlle(d.sesong, d.saler, d.program);
+  assert.ok(r.blandet);
+  assert.ok(r.egen.nv > r.altI.C.nv, `egen ${r.egen.nv} mot C ${r.altI.C.nv}`);
+  assert.ok(r.egen.netto - r.altI.C.netto > 15000);
+});

@@ -1,0 +1,843 @@
+// Generert av scripts/bygg.js fra src/. Rediger kildene, ikke denne fila.
+(() => {
+"use strict";
+
+// ---- src/motor.js ----
+// Regnemotor for Konsertplan. Ingen DOM, ingen avhengigheter.
+// Reglene følger oppgaveteksten til MET3 AK2 og skript/fasit.py i arbeidsmappa.
+//
+// Tidslinje: t = 0 er like før første måned (ikke diskontert). t = 1 er slutten av
+// måned 1, og så videre. Siste tidspunkt er måneden etter siste konsert, når
+// billettoppgjøret kommer, eller senere hvis en leiebyggekloss forfaller senere.
+//
+// Per konsert i måned m med N betalte billetter:
+//   billettoppgjør   + N × (billettpris − gebyr)      i m + 1
+//   publikumsutgift  − N × utgiftPerBillett          i m
+//   pakke, del 1     − pakke × pakkeDel1Andel        i m − 1 (t0 for første måned)
+//   pakke, del 2     − pakke × (1 − pakkeDel1Andel)  i m
+//   leie             etter salens byggeklosser
+//
+// Byggeklosser for leie (sal.leie er en liste):
+//   { type: "perKonsert", belop, naar }                 naar: "konsertmaaned" | "maanedEtter" | "maanedFoer"
+//   { type: "andel", andel, minimum, naar }             andel av billettoppgjøret etter gebyr, minst minimum per konsert
+//   { type: "engang", belop, tidspunkt }                én betaling for hele sesongen
+//   { type: "sesong", belop, plan: [{tidspunkt, andel}] } fast sesongleie med betalingsplan
+// Engang og sesong betales én gang hvis salen er i bruk på minst én konsert.
+
+const NAAR = { konsertmaaned: 0, maanedEtter: 1, maanedFoer: -1 };
+
+function kapasitet(sal, oppsett) {
+  const k = sal.kapasitet?.[oppsett];
+  return typeof k === "number" && k > 0 ? k : null;
+}
+
+/** Antall betalte billetter for en konsert i en gitt sal og oppsett. */
+function billetter(sesong, konsert, sal, oppsett = konsert.oppsett) {
+  const faktor = sesong.etterspoerselsfaktor ?? 1;
+  const onsket = (konsert.forventetSalg ?? 0) * faktor;
+  const kap = kapasitet(sal, oppsett);
+  if (kap === null) return { n: 0, onsket, kap: null, kappet: onsket > 0, mulig: false };
+  const n = Math.min(onsket, kap);
+  return { n, onsket, kap, kappet: onsket > kap, mulig: true };
+}
+
+/** Leie som avhenger av konserten (perKonsert og andel), udiskontert. */
+function leieForKonsert(sesong, sal, n) {
+  const oppgjoer = n * (sesong.billettpris - sesong.gebyr);
+  let sum = 0;
+  const deler = [];
+  for (const b of sal.leie ?? []) {
+    if (b.type === "perKonsert") { sum += b.belop; deler.push({ ...b, belop: b.belop }); }
+    else if (b.type === "andel") {
+      const belop = Math.max(b.minimum ?? 0, (b.andel ?? 0) * oppgjoer);
+      sum += belop; deler.push({ ...b, belop, minimumSlaarInn: belop > (b.andel ?? 0) * oppgjoer });
+    }
+  }
+  return { sum, deler };
+}
+
+/** Faste leiebetalinger for sesongen (engang og sesong), som liste av {tidspunkt, belop, type}. */
+function fasteLeiebetalinger(sal) {
+  const ut = [];
+  for (const b of sal.leie ?? []) {
+    if (b.type === "engang") ut.push({ tidspunkt: b.tidspunkt ?? 0, belop: b.belop, type: b.type });
+    else if (b.type === "sesong") for (const p of b.plan ?? []) ut.push({ tidspunkt: p.tidspunkt, belop: b.belop * p.andel, type: b.type });
+  }
+  return ut;
+}
+
+function fastLeieSum(sal) {
+  return fasteLeiebetalinger(sal).reduce((s, p) => s + p.belop, 0);
+}
+
+function diskonteringsfaktor(sesong, t) {
+  const r = sesong.rente ?? 0;
+  if (t === 0) return 1;
+  return sesong.konvensjon === "maaned" ? 1 / (1 + r / 12) ** t : 1 / (1 + r) ** (t / 12);
+}
+
+/** Siste tidspunkt på tidslinja for et program og de salene som brukes. */
+function sisteTidspunkt(program, salerIBruk) {
+  let T = 1;
+  for (const k of program) T = Math.max(T, k.maaned + 1); // oppgjøret kommer i m + 1
+  for (const s of salerIBruk) {
+    for (const b of s.leie ?? []) {
+      if (b.type === "engang") T = Math.max(T, b.tidspunkt ?? 0);
+      if (b.type === "sesong") for (const p of b.plan ?? []) T = Math.max(T, p.tidspunkt);
+      if ((b.type === "perKonsert" || b.type === "andel") && NAAR[b.naar] === 1) for (const k of program) T = Math.max(T, k.maaned + 1);
+    }
+  }
+  return T;
+}
+
+/**
+ * Beregner en plan der salVelger(konsert) gir salen for hver konsert.
+ * Returnerer kontantstrøm per tidspunkt, saldo, netto, nåverdi, finansieringsbehov og tall per konsert.
+ */
+function beregnPlan(sesong, saler, program, salVelger) {
+  const salAv = new Map(saler.map(s => [s.id, s]));
+  const valgt = program.map(k => {
+    const s = salVelger(k);
+    return typeof s === "string" ? salAv.get(s) : s;
+  });
+  const salerIBruk = [...new Set(valgt.filter(Boolean))];
+  const T = sisteTidspunkt(program, salerIBruk);
+  const cf = new Array(T + 1).fill(0);
+  const linjer = { billetter: cf.slice(), utgift: cf.slice(), pakke: cf.slice(), leie: cf.slice() };
+  const legg = (linje, t, belop) => { const i = Math.max(0, Math.min(T, t)); cf[i] += belop; linjer[linje][i] += belop; };
+
+  const del1 = sesong.pakkeDel1Andel ?? 0.5;
+  const perKonsert = program.map((k, i) => {
+    const sal = valgt[i];
+    const m = k.maaned;
+    if (!sal) return { nr: k.nr, sal: null, n: 0, mulig: false, kappet: false, billettnetto: 0, utgift: 0, pakke: sesong.pakke, leie: 0, bidrag: -sesong.pakke };
+    const b = billetter(sesong, k, sal);
+    const n = b.n;
+    const billettnetto = n * (sesong.billettpris - sesong.gebyr);
+    const utgift = n * sesong.utgiftPerBillett;
+    legg("billetter", m + 1, billettnetto);
+    legg("utgift", m, -utgift);
+    legg("pakke", m - 1, -sesong.pakke * del1);
+    legg("pakke", m, -sesong.pakke * (1 - del1));
+    const leie = leieForKonsert(sesong, sal, n);
+    for (const d of leie.deler) legg("leie", m + (NAAR[d.naar] ?? 0), -d.belop);
+    return { nr: k.nr, sal: sal.id, n, onsket: b.onsket, kap: b.kap, mulig: b.mulig, kappet: b.kappet,
+             billettnetto, utgift, pakke: sesong.pakke, leie: leie.sum, leieDeler: leie.deler,
+             bidrag: billettnetto - utgift - sesong.pakke - leie.sum };
+  });
+
+  const faste = [];
+  for (const s of salerIBruk) for (const p of fasteLeiebetalinger(s)) { legg("leie", p.tidspunkt, -p.belop); faste.push({ sal: s.id, ...p }); }
+
+  const saldo = [];
+  let s = 0;
+  for (const c of cf) { s += c; saldo.push(s); }
+  const nv = cf.reduce((sum, c, t) => sum + c * diskonteringsfaktor(sesong, t), 0);
+  const netto = cf.reduce((a, b) => a + b, 0);
+  const behov = Math.max(0, -Math.min(...saldo));
+  const fastLeie = faste.reduce((a, p) => a + p.belop, 0);
+  return { T, cf, linjer, saldo, netto, nv, behov, perKonsert, faste, fastLeie,
+           holderRammen: sesong.ramme == null ? null : behov <= sesong.ramme,
+           salerIBruk: salerIBruk.map(x => x.id) };
+}
+
+/** Alt i én sal: samme sal på alle konsertene, med konsertens oppsett der salen kan, ellers det andre oppsettet. */
+function beregnAltI(sesong, saler, program, sal) {
+  const tilpasset = program.map(k => {
+    if (kapasitet(sal, k.oppsett) !== null) return k;
+    const annet = k.oppsett === "sitte" ? "staa" : "sitte";
+    return kapasitet(sal, annet) !== null ? { ...k, oppsett: annet, oppsettByttet: true } : k;
+  });
+  return beregnPlan(sesong, saler, tilpasset, () => sal);
+}
+
+/** Alle resultatene: «alt i <sal>» for hver sal, egen plan og avstå. */
+function beregnAlle(sesong, saler, program) {
+  const altI = {};
+  for (const s of saler) altI[s.id] = beregnAltI(sesong, saler, program, s);
+  const egen = beregnPlan(sesong, saler, program, k => k.salId);
+  const blandet = new Set(program.map(k => k.salId)).size > 1;
+  return { altI, egen, blandet, avstaa: { nv: 0, netto: 0, behov: 0, holderRammen: true } };
+}
+
+/** Dyp kopi uten funksjoner, til lagring og «tilbake til casen». */
+const kopi = x => JSON.parse(JSON.stringify(x));
+
+
+// ---- src/forslag.js ----
+// Sjangerregel: sjanger gir forslag til oppsett (sitte eller stå), forventet salg gir forslag
+// til sal (den billigste salen som kan velges per konsert og har plass i det oppsettet).
+// Regelen er enkel med vilje, og vises åpent i grensesnittet så Maja kan overstyre den.
+
+const SITTENDE = ["indiefolk", "visepop", "jazz", "nordisk soul", "soul / jazz", "soul", "drømmepop", "folk", "klassisk", "vise"];
+const STAAENDE = ["alternativ pop", "elektronika", "shoegaze", "indierock", "synthpop", "elektronisk pop", "pop", "rock", "hiphop", "elektronisk"];
+
+function oppsettForSjanger(sjanger) {
+  const s = (sjanger ?? "").trim().toLowerCase();
+  if (!s) return null;
+  if (SITTENDE.some(x => s === x || s.includes(x))) return "sitte";
+  if (STAAENDE.some(x => s === x || s.includes(x))) return "staa";
+  return null;
+}
+
+/**
+ * Forslag for én konsert. Returnerer { oppsett, salId, hvorfor, kappet } eller null hvis ingen sal passer.
+ * Saler med kunHelSesong holdes utenfor, siden de ikke kan velges per konsert.
+ */
+function forslagForKonsert(sesong, saler, konsert) {
+  const oppsett = oppsettForSjanger(konsert.sjanger) ?? konsert.oppsett ?? "staa";
+  const kandidater = saler.filter(s => !s.kunHelSesong);
+  const onsket = (konsert.forventetSalg ?? 0) * (sesong.etterspoerselsfaktor ?? 1);
+  const vurdert = kandidater.map(s => {
+    const b = billetter(sesong, konsert, s, oppsett);
+    if (!b.mulig) return null;
+    const leie = leieForKonsert(sesong, s, b.n).sum;
+    const bidrag = b.n * (sesong.billettpris - sesong.gebyr - sesong.utgiftPerBillett) - leie;
+    return { sal: s, n: b.n, kap: b.kap, kappet: b.kappet, leie, bidrag };
+  }).filter(Boolean);
+  if (vurdert.length === 0) return null;
+  const medPlass = vurdert.filter(v => !v.kappet);
+  let valg, hvorfor;
+  if (medPlass.length) {
+    valg = medPlass.reduce((a, b) => (b.leie < a.leie ? b : a));
+    const andre = medPlass.filter(v => v !== valg).map(v => `${v.sal.kort ?? v.sal.navn} ${krTekst(v.leie)}`);
+    hvorfor = `${oppsettTekst(oppsett)} ut fra sjangeren. ${valg.sal.navn} har plass til ${Math.round(onsket)} og er billigst med ${krTekst(valg.leie)} i leie` +
+      (andre.length ? ` (${andre.join(", ")})` : "") +
+      (vurdert.length > medPlass.length ? `. ${vurdert.filter(v => v.kappet).map(v => `${v.sal.navn} har bare plass til ${v.kap}`).join(", ")}` : "") + ".";
+  } else {
+    valg = vurdert.reduce((a, b) => (b.bidrag > a.bidrag ? b : a));
+    hvorfor = `${oppsettTekst(oppsett)} ut fra sjangeren. Ingen sal har plass til ${Math.round(onsket)} ${oppsett === "sitte" ? "sittende" : "stående"}. ${valg.sal.navn} gir høyest bidrag, men salget kappes til ${valg.kap}.`;
+  }
+  return { oppsett, salId: valg.sal.id, hvorfor, kappet: valg.kappet, vurdert };
+}
+
+const krTekst = v => Math.round(v).toLocaleString("nb-NO") + " kr";
+const oppsettTekst = o => (o === "sitte" ? "Sittende" : "Stående");
+
+
+// ---- src/standard-2027.js ----
+// Sceneskift våren 2027 slik casen i MET3 AK2 beskriver den. Dette er utgangspunktet i alt:
+// siden åpner med denne sesongen, og «tilbake til casen» henter verdier herfra.
+// Kilder: oppgaveteksten (Majas forutsetninger og de tre tilbudene), program.html på
+// Sceneskifts case-nettside, og 2026-salget fra ordreeksporten (betalte billetter uten
+// avbrutte og dupliserte transaksjoner, se forstaelse.md kap. 2).
+
+const SESONG_2027 = {
+  navn: "Sceneskift våren 2027",
+  aar: 2027,
+  billettpris: 350,          // kr per betalt billett, alle billetter (ingen rabatter i 2027)
+  gebyr: 10,                 // kr per betalt billett, trekkes i billettoppgjøret
+  utgiftPerBillett: 10,      // andre publikumsavhengige utgifter, betalt i konsertmåneden
+  pakke: 60000,              // artist og øvrig produksjon (Rigg & Ro), fast per konsert
+  pakkeDel1Andel: 0.5,       // halvparten måneden før, resten i konsertmåneden
+  rente: 0.04,               // real årsrente
+  konvensjon: "aar",         // (1 + r)^(t/12). "maaned" gir (1 + r/12)^t
+  ramme: 250000,             // startfinansiering Maja tror hun kan skaffe
+  etterspoerselsfaktor: 1,   // 1 = Majas premiss: samme salg som 2026
+  maanedsnavn: ["Før januar", "Januar", "Februar", "Mars", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Desember"],
+};
+
+const SALER_2027 = [
+  {
+    id: "A", navn: "Lune Sal", kort: "A", farge: "blaa",
+    beskrivelse: "Liten kultursal i et tidligere snekkerverksted. Lav scene, intimt.",
+    kilde: "https://alu042.github.io/met3-lune-sal/", bilde: "img/lune-sal.webp",
+    kapasitet: { staa: null, sitte: 250 }, sitteAntatt: false,
+    kapasitetNotat: "Tilbudet: 250 salgbare plasser. Nettsiden sier 270 seter. Regnes som sittende sal uten ståoppsett (antatt).",
+    kunHelSesong: false,
+    leie: [{ type: "perKonsert", belop: 9000, naar: "konsertmaaned" }],
+  },
+  {
+    id: "B", navn: "Søyleverket", kort: "B", farge: "gul",
+    beskrivelse: "Kulturrom med flatt gulv, fast scene og løse stoler. Fast sesongleie.",
+    kilde: "https://alu042.github.io/met3-soyleverket/", bilde: "img/soyleverket.webp",
+    kapasitet: { staa: 450, sitte: 250 }, sitteAntatt: true,
+    kapasitetNotat: "Tilbudet: 450 salgbare plasser. Nettsiden sier inntil 500 personer. Sitteplasser 250 er antatt (løse stoler på flatt gulv).",
+    kunHelSesong: true,
+    leie: [
+      { type: "engang", belop: 35000, tidspunkt: 0, navn: "Engangstilpasning" },
+      { type: "sesong", belop: 140000, plan: [{ tidspunkt: 0, andel: 0.5 }, { tidspunkt: 3, andel: 0.5 }], navn: "Sesongleie" },
+    ],
+  },
+  {
+    id: "C", navn: "Skarvkaien", kort: "C", farge: "rosa",
+    beskrivelse: "Havnelager med fast scene og åpent gulv. Leien følger billettoppgjøret.",
+    kilde: "https://alu042.github.io/met3-skarvkaien/", bilde: "img/skarvkaien.webp",
+    kapasitet: { staa: 450, sitte: 200 }, sitteAntatt: true,
+    kapasitetNotat: "Tilbudet: 450 salgbare plasser. Nettsiden sier inntil 490 stående. Sitteplasser 200 er antatt (kan rigges sittende).",
+    kunHelSesong: false,
+    leie: [{ type: "andel", andel: 0.18, minimum: 7500, naar: "maanedEtter" }],
+  },
+];
+
+// Programmet fra program.html, 2026-salget fra ordrene (K01 til K12 i samme rekkefølge).
+const P = [
+  [1, "15.01", "June Varde", "Indiefolk", 1, 140],
+  [2, "29.01", "Mellomlys", "Drømmepop", 1, 190],
+  [3, "12.02", "Liv Eik", "Nordisk soul", 2, 230],
+  [4, "26.02", "Blåtimekvartetten", "Jazz", 2, 310],
+  [5, "12.03", "Ravlinje", "Elektronika", 3, 370],
+  [6, "26.03", "Vesperhagen", "Alternativ pop", 3, 480],
+  [7, "09.04", "Iben Vår", "Visepop", 4, 160],
+  [8, "23.04", "Sølvregn", "Shoegaze", 4, 250],
+  [9, "07.05", "Dobbeltspor", "Indierock", 5, 330],
+  [10, "28.05", "Nattfiol", "Synthpop", 5, 420],
+  [11, "11.06", "Ada Mørk", "Soul / jazz", 6, 210],
+  [12, "25.06", "Glassmorgen", "Elektronisk pop", 6, 290],
+];
+
+const PROGRAM_2027 = P.map(([nr, dato, artist, sjanger, maaned, salg2026]) => ({
+  nr, dato, artist, sjanger, maaned, salg2026,
+  forventetSalg: salg2026,
+  salId: "C",            // casens råd som utgangspunkt
+  oppsett: "staa",
+  notat: nr === 6 ? "«Vårens største navn» ifølge Sceneskift" : "",
+}));
+
+const SJANGRE = [
+  "Indiefolk", "Drømmepop", "Nordisk soul", "Jazz", "Elektronika", "Alternativ pop",
+  "Visepop", "Shoegaze", "Indierock", "Synthpop", "Soul / jazz", "Elektronisk pop",
+  "Pop", "Rock", "Hiphop", "Folk", "Klassisk", "Annet",
+];
+
+function standardSesong() {
+  return JSON.parse(JSON.stringify({ sesong: SESONG_2027, saler: SALER_2027, program: PROGRAM_2027 }));
+}
+
+
+// ---- src/lagring.js ----
+// Lagring: localStorage automatisk, og JSON-fil med «Lagre sesong» og «Åpne sesong».
+const NOKKEL = "konsertplan.sesong.v1";
+
+function lesLokalt() {
+  try {
+    const t = localStorage.getItem(NOKKEL);
+    return t ? JSON.parse(t) : null;
+  } catch { return null; }
+}
+
+function lagreLokalt(data) {
+  try { localStorage.setItem(NOKKEL, JSON.stringify(data)); } catch { /* privat vindu eller fullt lager */ }
+}
+
+function slettLokalt() {
+  try { localStorage.removeItem(NOKKEL); } catch { /* ingenting å gjøre */ }
+}
+
+function lastNedFil(data, filnavn) {
+  const blob = new Blob([JSON.stringify({ format: "konsertplan", versjon: 1, lagret: new Date().toISOString(), ...data }, null, 1)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filnavn;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function lesFil(fil) {
+  return new Promise((ok, feil) => {
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const d = JSON.parse(r.result);
+        if (!d.sesong || !Array.isArray(d.saler) || !Array.isArray(d.program)) throw new Error("Fila mangler sesong, saler eller program.");
+        ok({ sesong: d.sesong, saler: d.saler, program: d.program });
+      } catch (e) { feil(e); }
+    };
+    r.onerror = () => feil(new Error("Kunne ikke lese fila."));
+    r.readAsText(fil);
+  });
+}
+
+
+// ---- src/figurer.js ----
+// SVG-figurer tegnet for hånd, samme teknikk som presentasjonen i sceneskift-kart.
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl(tag, attrs = {}, tekst) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (tekst !== undefined) e.textContent = tekst;
+  return e;
+}
+
+const tallF = v => Math.round(v).toLocaleString("nb-NO");
+const pent = (v, steg) => Math.ceil(v / steg) * steg;
+
+function stegFor(spenn) {
+  const kandidater = [10000, 20000, 25000, 50000, 100000, 200000, 250000, 500000];
+  return kandidater.find(s => spenn / s <= 7) ?? 1000000;
+}
+
+/** Saldo per måned: én linje per serie. serier = [{navn, farge, verdier, bred}] */
+function tegnSaldo(svg, serier, etiketter, ramme) {
+  svg.replaceChildren();
+  const W = 900, H = 420;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const P = { x1: 90, x2: W - 24, y1: 24, y2: H - 54 };
+  const alle = serier.flatMap(s => s.verdier);
+  const steg = stegFor(Math.max(...alle) - Math.min(...alle, -ramme));
+  const ymin = Math.floor(Math.min(...alle, -ramme) / steg) * steg;
+  const ymax = pent(Math.max(...alle, 0), steg);
+  const n = etiketter.length;
+  const sx = i => P.x1 + (i / (n - 1)) * (P.x2 - P.x1);
+  const sy = v => P.y2 - ((v - ymin) / (ymax - ymin)) * (P.y2 - P.y1);
+  for (let v = ymin; v <= ymax; v += steg) {
+    svg.appendChild(svgEl("line", { class: v === 0 ? "akse" : "rutenett", x1: P.x1, x2: P.x2, y1: sy(v), y2: sy(v) }));
+    svg.appendChild(svgEl("text", { class: "etikett", x: P.x1 - 10, y: sy(v) + 4, "text-anchor": "end" }, tallF(v)));
+  }
+  if (ramme) {
+    svg.appendChild(svgEl("line", { class: "rammestrek", x1: P.x1, x2: P.x2, y1: sy(-ramme), y2: sy(-ramme) }));
+    svg.appendChild(svgEl("text", { class: "etikett minus", x: P.x2, y: sy(-ramme) - 6, "text-anchor": "end" }, `Rammen, ${tallF(ramme)} kr`));
+  }
+  etiketter.forEach((e, i) => svg.appendChild(svgEl("text", { class: "etikett", x: sx(i), y: P.y2 + 22, "text-anchor": "middle" }, e)));
+  for (const s of serier) {
+    const d = s.verdier.map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join(" ");
+    svg.appendChild(svgEl("path", { class: "linje" + (s.bred ? " bred" : ""), d, style: `stroke: var(--${s.farge})` }));
+    s.verdier.forEach((v, i) => svg.appendChild(svgEl("circle", { cx: sx(i), cy: sy(v), r: s.bred ? 4.5 : 3, style: `fill: var(--${s.farge})` })));
+    if (s.bred) {
+      const siste = s.verdier.length - 1;
+      svg.appendChild(svgEl("text", { class: "serie", x: sx(siste) - 8, y: sy(s.verdier[siste]) - 12, "text-anchor": "end", style: `fill: var(--${s.farge})` }, s.navn));
+    }
+  }
+}
+
+/** Bidrag per konsert: to stolper per konsert. serier = [{navn, farge, verdier}], etiketter per konsert. */
+function tegnBidrag(svg, serier, etiketter) {
+  svg.replaceChildren();
+  const W = 900, H = 380;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const P = { x1: 90, x2: W - 24, y1: 24, y2: H - 54 };
+  const alle = serier.flatMap(s => s.verdier);
+  const steg = stegFor(Math.max(...alle, 0) - Math.min(...alle, 0));
+  const ymin = Math.floor(Math.min(...alle, 0) / steg) * steg;
+  const ymax = pent(Math.max(...alle, 0), steg);
+  const n = etiketter.length;
+  const gruppe = (P.x2 - P.x1) / n;
+  const bredde = Math.min(26, (gruppe - 10) / serier.length);
+  const sy = v => P.y2 - ((v - ymin) / (ymax - ymin)) * (P.y2 - P.y1);
+  for (let v = ymin; v <= ymax; v += steg) {
+    svg.appendChild(svgEl("line", { class: v === 0 ? "akse" : "rutenett", x1: P.x1, x2: P.x2, y1: sy(v), y2: sy(v) }));
+    svg.appendChild(svgEl("text", { class: "etikett", x: P.x1 - 10, y: sy(v) + 4, "text-anchor": "end" }, tallF(v)));
+  }
+  etiketter.forEach((e, i) => svg.appendChild(svgEl("text", { class: "etikett", x: P.x1 + gruppe * (i + 0.5), y: P.y2 + 22, "text-anchor": "middle" }, e)));
+  serier.forEach((s, j) => {
+    s.verdier.forEach((v, i) => {
+      const x = P.x1 + gruppe * (i + 0.5) - (serier.length * bredde) / 2 + j * bredde;
+      svg.appendChild(svgEl("rect", { x, y: Math.min(sy(v), sy(0)), width: bredde - 3, height: Math.abs(sy(v) - sy(0)), style: `fill: var(--${s.farge})`, opacity: j === 0 ? 1 : 0.55 }));
+    });
+  });
+}
+
+
+// ---- src/app.js ----
+// Konsertplan: tilstand og rendering. Alt regnes på nytt ved hver endring.
+
+const tall = v => Math.round(v ?? 0).toLocaleString("nb-NO");
+const kr = v => tall(v) + " kr";
+const pst = v => Math.round(v * 100) + " %";
+const MAANEDER = ["Start", "Jan", "Feb", "Mar", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Des"];
+const FARGER = ["blaa", "gul", "rosa", "oransje", "gronn", "graa"];
+const FARGENAVN = { blaa: "blå", gul: "gul", rosa: "rosa", oransje: "oransje", gronn: "grønn", graa: "grå" };
+
+function h(tag, attrs = {}, ...barn) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k === "style") e.setAttribute("style", v);
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "value") e.value = v;
+    else if (k === "checked" || k === "disabled" || k === "selected") e[k] = v;
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const b of barn.flat()) if (b !== null && b !== undefined && b !== false) e.append(b);
+  return e;
+}
+
+const state = { data: null, fane: "program", referanse: "C" };
+
+function salAv(id) { return state.data.saler.find(s => s.id === id); }
+function salerPerKonsert() { return state.data.saler.filter(s => !s.kunHelSesong); }
+function salTittel(s) { return s.kort ? `${s.kort}: ${s.navn}` : s.navn; }
+function fargeFor(s) { return s?.farge ?? "graa"; }
+
+function lagre() { lagreLokalt(state.data); }
+function oppdater() { lagre(); render(); }
+
+/* ---------- Oppstart ---------- */
+function init() {
+  state.data = lesLokalt() ?? standardSesong();
+  reparer();
+  document.getElementById("sesongnavn").addEventListener("change", e => { state.data.sesong.navn = e.target.value.trim() || SESONG_2027.navn; oppdater(); });
+  document.getElementById("knapp-lagre").addEventListener("click", () => {
+    const navn = (state.data.sesong.navn || "sesong").replace(/[^\wæøåÆØÅ-]+/g, "-").toLowerCase();
+    lastNedFil(state.data, `${navn}.konsertplan.json`);
+  });
+  document.getElementById("knapp-aapne").addEventListener("click", () => document.getElementById("fil").click());
+  document.getElementById("fil").addEventListener("change", async e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try { state.data = await lesFil(f); reparer(); oppdater(); }
+    catch (err) { alert(`Kunne ikke åpne fila: ${err.message}`); }
+    e.target.value = "";
+  });
+  document.getElementById("knapp-nullstill").addEventListener("click", () => {
+    if (!confirm("Nullstille alt til Sceneskift våren 2027? Endringene dine forsvinner, med mindre du har lagret dem som fil.")) return;
+    slettLokalt(); state.data = standardSesong(); oppdater();
+  });
+  const faner = [...document.querySelectorAll(".faner button")].map(b => b.dataset.fane);
+  const fraHash = () => { const f = location.hash.replace("#", ""); if (faner.includes(f) && f !== state.fane) { state.fane = f; render(); } };
+  for (const b of document.querySelectorAll(".faner button")) b.addEventListener("click", () => { state.fane = b.dataset.fane; history.replaceState(null, "", "#" + state.fane); render(); });
+  window.addEventListener("hashchange", fraHash);
+  if (faner.includes(location.hash.replace("#", ""))) state.fane = location.hash.replace("#", "");
+  render();
+}
+
+/** Rydder i data etter innlasting: manglende felt, saler som er slettet, oppsett som salen ikke har. */
+function reparer() {
+  const d = state.data;
+  d.sesong = { ...kopi(SESONG_2027), ...d.sesong };
+  if (!d.saler.length) d.saler = kopi(SALER_2027);
+  for (const s of d.saler) { s.leie ??= []; s.kapasitet ??= { staa: null, sitte: null }; s.farge ??= "graa"; }
+  const perKonsert = salerPerKonsert();
+  for (const k of d.program) {
+    k.oppsett ??= "staa";
+    k.forventetSalg ??= k.salg2026 ?? 0;
+    let s = salAv(k.salId);
+    if (!s || s.kunHelSesong) s = perKonsert[0];
+    k.salId = s?.id ?? null;
+    if (s && kapasitet(s, k.oppsett) === null) {
+      const annet = k.oppsett === "sitte" ? "staa" : "sitte";
+      if (kapasitet(s, annet) !== null) k.oppsett = annet;
+    }
+  }
+  if (!state.data.saler.some(s => s.id === state.referanse)) state.referanse = state.data.saler[0]?.id;
+}
+
+/* ---------- Rendering ---------- */
+function render() {
+  const d = state.data;
+  document.getElementById("sesongnavn").value = d.sesong.navn;
+  document.getElementById("undertekst").textContent = `${d.program.length} konserter, ${d.saler.length} saler. Ramme ${kr(d.sesong.ramme)}.`;
+  for (const b of document.querySelectorAll(".faner button")) b.setAttribute("aria-pressed", String(b.dataset.fane === state.fane));
+  const res = beregnAlle(d.sesong, d.saler, d.program);
+  renderStripe(res);
+  const main = document.getElementById("innhold");
+  main.replaceChildren();
+  ({ program: renderProgram, resultater: renderResultater, saler: renderSaler, forutsetninger: renderForutsetninger })[state.fane](main, res);
+}
+
+function statusTekst(r) {
+  const s = state.data.sesong;
+  if (s.ramme == null) return h("span", { class: "status svak" }, "Ingen ramme satt");
+  return r.behov <= s.ramme
+    ? h("span", { class: "status pluss" }, `Holder rammen, ${kr(s.ramme - r.behov)} til gode`)
+    : h("span", { class: "status minus" }, `Over rammen med ${kr(r.behov - s.ramme)}`);
+}
+
+function renderStripe(res) {
+  const el = document.getElementById("stripe");
+  el.replaceChildren();
+  const d = state.data;
+  const deler = [
+    { navn: "Egen plan", merke: res.blandet ? h("span", { class: "merke varsel" }, "utenfor casen") : null, farge: "gronn", r: res.egen },
+    ...d.saler.map(s => ({ navn: `Alt i ${salTittel(s)}`, farge: fargeFor(s), r: res.altI[s.id] })),
+  ];
+  for (const p of deler) {
+    el.append(h("div", { class: "stripe-del", style: `--c: var(--${p.farge})` },
+      h("div", { class: "navn" }, p.navn, p.merke),
+      h("div", { class: "rad" }, h("span", { class: "svak" }, "Nåverdi"), h("b", { class: `tall ${p.r.nv < 0 ? "minus" : ""}` }, kr(p.r.nv))),
+      h("div", { class: "rad" }, h("span", { class: "svak" }, "Trenger"), h("b", { class: "tall" }, kr(p.r.behov))),
+      statusTekst(p.r)));
+  }
+}
+
+/* ---------- Program ---------- */
+function renderProgram(main, res) {
+  const d = state.data;
+  const perKonsert = salerPerKonsert();
+  const helSesong = d.saler.filter(s => s.kunHelSesong);
+  const sek = h("section", { class: "seksjon" },
+    h("h2", {}, "Programmet, konsert for konsert"),
+    h("p", { class: "ingress" }, `Endre artist, forventet salg, oppsett og sal. Forventet salg starter på salget til tilsvarende konsert i 2026, som er Majas premiss. Bidraget er billettinntekt etter gebyr og publikumsutgift, minus pakken og leien for salen, uten diskontering.${helSesong.length ? ` ${helSesong.map(salTittel).join(" og ")} har fast sesongleie og kan bare velges som hel sesong, se stripa øverst.` : ""}`));
+
+  const linje = h("div", { class: "verktoylinje" },
+    h("button", { type: "button", onclick: () => { for (const k of d.program) { const f = forslagForKonsert(d.sesong, d.saler, k); if (f) { k.salId = f.salId; k.oppsett = f.oppsett; } } oppdater(); } }, "Bruk forslagene på alle"),
+    h("button", { type: "button", onclick: () => { for (const k of d.program) k.forventetSalg = k.salg2026 ?? k.forventetSalg; oppdater(); } }, "Sett salget tilbake til 2026"),
+    ...perKonsert.map(s => h("button", { type: "button", class: "stille", onclick: () => { for (const k of d.program) { k.salId = s.id; if (kapasitet(s, k.oppsett) === null) k.oppsett = k.oppsett === "sitte" ? "staa" : "sitte"; } oppdater(); } }, `Alle i ${s.kort ?? s.navn}`)),
+    h("span", { class: "mellomrom" }),
+    h("button", { type: "button", onclick: () => leggTilKonsert() }, "Legg til konsert"));
+  sek.append(linje);
+
+  const hode = h("tr", {},
+    h("th", {}, "Nr"), h("th", {}, "Dato"), h("th", {}, "Artist"), h("th", {}, "Sjanger"), h("th", { class: "hoyre" }, "Forventet salg"),
+    h("th", {}, "Oppsett"), h("th", {}, "Sal"), h("th", {}, "Forslag"), h("th", { class: "hoyre" }, "Billetter"), h("th", { class: "hoyre" }, "Leie"), h("th", { class: "hoyre" }, "Bidrag"), h("th", {}));
+  const rader = d.program.map((k, i) => radForKonsert(k, i, res.egen.perKonsert[i], perKonsert));
+  const sumBidrag = res.egen.perKonsert.reduce((a, k) => a + k.bidrag, 0);
+  const fot = h("tfoot", {},
+    h("tr", {}, h("td", { colspan: 8 }, "Sum bidrag fra konsertene"), h("td", { class: "hoyre tall" }, tall(res.egen.perKonsert.reduce((a, k) => a + k.n, 0))), h("td", { class: "hoyre tall" }, kr(res.egen.perKonsert.reduce((a, k) => a + k.leie, 0))), h("td", { class: `hoyre tall ${sumBidrag < 0 ? "minus" : ""}` }, kr(sumBidrag)), h("td")),
+    res.egen.fastLeie ? h("tr", {}, h("td", { colspan: 10 }, `Faste leiebetalinger for sesongen (${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(", ")})`), h("td", { class: "hoyre tall minus" }, kr(-res.egen.fastLeie)), h("td")) : null,
+    h("tr", {}, h("td", { colspan: 10 }, "Samlet netto for sesongen, udiskontert"), h("td", { class: `hoyre tall ${res.egen.netto < 0 ? "minus" : ""}` }, kr(res.egen.netto)), h("td")));
+  sek.append(h("div", { class: "tabellramme" }, h("table", { class: "program" }, h("thead", {}, hode), h("tbody", {}, rader), fot)));
+
+  const kappet = res.egen.perKonsert.filter(k => k.kappet);
+  if (kappet.length) sek.append(h("p", { class: "varsel", style: "margin-top: 12px" }, `${kappet.length} ${kappet.length === 1 ? "konsert" : "konserter"} selger mindre enn forventet fordi salen er full: ${kappet.map(k => `nr ${k.nr} (${tall(k.onsket)} forventet, ${k.kap} plasser)`).join(", ")}. Tapte billetter: ${tall(kappet.reduce((a, k) => a + k.onsket - k.n, 0))}.`));
+  main.append(sek);
+}
+
+function radForKonsert(k, i, r, perKonsert) {
+  const d = state.data;
+  const sal = salAv(k.salId);
+  const f = forslagForKonsert(d.sesong, d.saler, k);
+  const forslagLik = f && f.salId === k.salId && f.oppsett === k.oppsett;
+  const endre = (felt, verdi) => { k[felt] = verdi; oppdater(); };
+  const oppsettKnapp = (o, tekst) => h("button", { type: "button", "aria-pressed": String(k.oppsett === o), disabled: sal && kapasitet(sal, o) === null, title: sal && kapasitet(sal, o) === null ? `${sal.navn} har ikke ${tekst.toLowerCase()} oppsett` : `${tekst}: ${kapasitet(sal, o) ?? "?"} plasser`, onclick: () => endre("oppsett", o) }, tekst);
+  const avvik = k.salg2026 != null && k.forventetSalg !== k.salg2026;
+  return h("tr", {},
+    h("td", { class: "nr" }, String(k.nr)),
+    h("td", {}, h("input", { type: "text", value: k.dato ?? "", size: 5, "aria-label": "Dato", onchange: e => endre("dato", e.target.value) })),
+    h("td", { class: "artist" }, h("input", { type: "text", value: k.artist ?? "", "aria-label": "Artist", onchange: e => endre("artist", e.target.value) })),
+    h("td", { class: "sjanger" }, h("select", { "aria-label": "Sjanger", onchange: e => endre("sjanger", e.target.value) },
+      ...[...new Set([...SJANGRE, k.sjanger].filter(Boolean))].map(s => h("option", { value: s, selected: s === k.sjanger }, s)))),
+    h("td", { class: "salg hoyre" },
+      h("input", { type: "number", min: 0, step: 10, value: k.forventetSalg, "aria-label": "Forventet salg", onchange: e => endre("forventetSalg", Math.max(0, Number(e.target.value) || 0)) }),
+      k.salg2026 != null ? h("div", { class: `liten ${avvik ? "" : "svak"}` }, avvik ? h("button", { type: "button", class: "stille liten", onclick: () => endre("forventetSalg", k.salg2026) }, `2026: ${tall(k.salg2026)}`) : `2026: ${tall(k.salg2026)}`) : null),
+    h("td", {}, h("div", { class: "oppsett-valg" }, oppsettKnapp("sitte", "Sitte"), oppsettKnapp("staa", "Stå"))),
+    h("td", {}, h("div", { class: "salvalg", style: `--c: var(--${fargeFor(sal)})` },
+      h("select", { "aria-label": "Sal", onchange: e => { const s = salAv(e.target.value); k.salId = s.id; if (kapasitet(s, k.oppsett) === null) k.oppsett = k.oppsett === "sitte" ? "staa" : "sitte"; oppdater(); } },
+        ...perKonsert.map(s => h("option", { value: s.id, selected: s.id === k.salId }, salTittel(s)))))),
+    h("td", { class: "forslag" },
+      f ? [
+        forslagLik ? h("span", { class: "svak" }, "Som valgt") : h("button", { type: "button", class: "liten", onclick: () => { k.salId = f.salId; k.oppsett = f.oppsett; oppdater(); } }, `Bruk ${salAv(f.salId)?.kort ?? salAv(f.salId)?.navn} ${f.oppsett === "sitte" ? "sittende" : "stående"}`),
+        h("span", { class: "hvorfor liten svak" }, f.hvorfor),
+      ] : h("span", { class: "svak" }, "Ingen sal passer")),
+    h("td", { class: "hoyre tall" }, tall(r.n), r.kappet ? h("div", {}, h("span", { class: "merke varsel" }, "fullt")) : null),
+    h("td", { class: "hoyre tall" }, kr(r.leie), r.leieDeler?.some(x => x.minimumSlaarInn) ? h("div", {}, h("span", { class: "merke" }, "minimum")) : null),
+    h("td", { class: `hoyre tall bidrag ${r.bidrag < 0 ? "minus" : ""}` }, kr(r.bidrag)),
+    h("td", {}, h("button", { type: "button", class: "stille liten farlig", title: "Fjern konserten", onclick: () => { if (confirm(`Fjerne konsert ${k.nr} (${k.artist || "uten navn"})?`)) { d.program.splice(i, 1); oppdater(); } } }, "Fjern")));
+}
+
+function leggTilKonsert() {
+  const d = state.data;
+  const sist = d.program[d.program.length - 1];
+  const sal = salerPerKonsert()[0];
+  d.program.push({ nr: Math.max(0, ...d.program.map(k => k.nr)) + 1, dato: "", artist: "", sjanger: "Pop", maaned: sist?.maaned ?? 1,
+    salg2026: null, forventetSalg: 200, salId: sal?.id ?? null, oppsett: sal && kapasitet(sal, "staa") !== null ? "staa" : "sitte", notat: "" });
+  oppdater();
+}
+
+/* ---------- Resultater ---------- */
+function renderResultater(main, res) {
+  const d = state.data;
+  const s = d.sesong;
+  const ref = salAv(state.referanse) ?? d.saler[0];
+
+  // Usikkerhet: to glidere som endrer forutsetningene direkte, som scenariovelgeren i arbeidsboka
+  const glider = (navn, felt, min, max, steg, vis, basis) => {
+    const inp = h("input", { type: "range", min, max, step: steg, value: s[felt], oninput: e => { s[felt] = Number(e.target.value); oppdater(); } });
+    return h("div", { class: "glider" },
+      h("label", {}, h("span", {}, navn), h("b", { class: "tall" }, vis(s[felt]), s[felt] !== basis ? h("button", { type: "button", class: "stille liten", onclick: () => { s[felt] = basis; oppdater(); } }, "basis") : null)),
+      inp, h("div", { class: "ende" }, h("span", {}, vis(min)), h("span", {}, vis(max))));
+  };
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, "Hva om salget eller pakkeprisen blir en annen?"),
+    h("p", { class: "ingress" }, "Dra i gliderne. Alt på siden regnes på nytt, også stripa øverst. Basis er Majas premiss: samme salg som i 2026 og 60 000 kr per konsert."),
+    h("div", { class: "glidere" },
+      glider("Etterspørsel i forhold til 2026", "etterspoerselsfaktor", 0.5, 1.3, 0.05, pst, 1),
+      glider("Pakkepris per konsert", "pakke", 48000, 78000, 1000, kr, 60000))));
+
+  // Kortene
+  const kort = (navn, farge, r, ekstra) => h("div", { class: "kort", style: `--c: var(--${farge})` },
+    h("h3", {}, navn, ekstra),
+    h("dl", {},
+      h("dt", {}, "Nåverdi"), h("dd", { class: `stor ${r.nv < 0 ? "minus" : ""}` }, kr(r.nv)),
+      h("dt", {}, "Netto, udiskontert"), h("dd", {}, kr(r.netto)),
+      h("dt", {}, "Trenger underveis"), h("dd", {}, kr(r.behov))),
+    statusTekst(r));
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, "Hele sesongen"),
+    h("p", { class: "ingress" }, "Nåverdi med 4 % realrente per år, og det største beløpet Sceneskift ligger ute med underveis, målt ved månedsslutt. Avstå gir null i begge."),
+    h("div", { class: "kort-rad" },
+      kort("Egen plan", "gronn", res.egen, res.blandet ? h("span", { class: "merke varsel" }, "utenfor casen") : null),
+      ...d.saler.map(x => kort(`Alt i ${salTittel(x)}`, fargeFor(x), res.altI[x.id])),
+      kort("Avstå", "graa", res.avstaa)),
+    res.blandet ? h("p", { class: "varsel", style: "margin-top: 14px" }, `Egen plan bruker ${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(" og ")}. Casen sier at avtalene gjelder hele programmet, så en blanding krever at utleierne godtar enkeltkonserter. Vis det som et alternativ Maja kan ta opp før signering, ikke som et tilbud som finnes.`) : null));
+
+  // Figurer
+  const etiketter = res.egen.saldo.map((_, t) => MAANEDER[t] ?? `M${t}`);
+  const saldoSvg = h("svg", { role: "img", "aria-label": "Saldo per måned" });
+  const serier = [
+    ...d.saler.map(x => ({ navn: x.kort ?? x.navn, farge: fargeFor(x), verdier: padTil(res.altI[x.id].saldo, etiketter.length) })),
+    { navn: "Egen plan", farge: "gronn", verdier: res.egen.saldo, bred: true },
+  ];
+  const bidragSvg = h("svg", { role: "img", "aria-label": "Bidrag per konsert" });
+  const refValg = h("select", { onchange: e => { state.referanse = e.target.value; render(); } }, ...d.saler.map(x => h("option", { value: x.id, selected: x.id === ref?.id }, `Alt i ${salTittel(x)}`)));
+  main.append(h("section", { class: "seksjon" },
+    h("div", { class: "figur-rad" },
+      h("div", { class: "figur" }, h("h3", {}, "Saldo ved månedsslutt"), h("p", { class: "liten svak" }, "Bunnen på hver linje er det salen krever i startfinansiering."),
+        h("div", { class: "forklaring" }, ...serier.map(x => h("span", { style: `--c: var(--${x.farge})` }, x.navn))), saldoSvg),
+      h("div", { class: "figur" }, h("h3", {}, "Bidrag per konsert, egen plan mot ", refValg), h("p", { class: "liten svak" }, "Udiskontert. Faste sesongbetalinger er ikke fordelt på konsertene."),
+        h("div", { class: "forklaring" }, h("span", { style: "--c: var(--gronn)" }, "Egen plan"), h("span", { style: `--c: var(--${fargeFor(ref)}); opacity: .7` }, `Alt i ${ref?.kort ?? ref?.navn}`)), bidragSvg))));
+  const svgNs = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  saldoSvg.replaceWith(svgNs); svgNs.setAttribute("role", "img"); svgNs.setAttribute("aria-label", "Saldo per måned");
+  tegnSaldo(svgNs, serier, etiketter, s.ramme);
+  const svgB = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  bidragSvg.replaceWith(svgB); svgB.setAttribute("role", "img"); svgB.setAttribute("aria-label", "Bidrag per konsert");
+  tegnBidrag(svgB, [
+    { navn: "Egen plan", farge: "gronn", verdier: res.egen.perKonsert.map(k => k.bidrag) },
+    { navn: `Alt i ${ref?.kort}`, farge: fargeFor(ref), verdier: ref ? res.altI[ref.id].perKonsert.map(k => k.bidrag) : [] },
+  ], d.program.map(k => `${k.nr}`));
+
+  // Kontantstrøm per måned for egen plan
+  const L = res.egen.linjer;
+  const rad = (navn, verdier, cls = "") => h("tr", { class: cls }, h("td", {}, navn), ...verdier.map(v => h("td", { class: `hoyre tall ${v < 0 ? "minus" : ""}` }, v === 0 ? h("span", { class: "svak" }, "0") : tall(v))));
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, "Betalingene måned for måned, egen plan"),
+    h("p", { class: "ingress" }, "Start er like før første konsertmåned og diskonteres ikke. Billettoppgjøret kommer måneden etter konserten, leie etter salens vilkår. Følg et tall herfra til stripa øverst."),
+    h("div", { class: "tabellramme" }, h("table", { class: "kontantstrom" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Kroner"), ...etiketter.map(e => h("th", { class: "hoyre" }, e)))),
+      h("tbody", {}, rad("Billettoppgjør", L.billetter), rad("Publikumsutgift", L.utgift), rad("Pakke", L.pakke), rad("Leie", L.leie), rad("Sum i måneden", res.egen.cf), rad("Saldo", res.egen.saldo, "saldo"))))));
+}
+
+function padTil(arr, n) { const ut = arr.slice(); while (ut.length < n) ut.push(ut[ut.length - 1]); return ut; }
+
+/* ---------- Saler ---------- */
+function renderSaler(main, res) {
+  const d = state.data;
+  const sek = h("section", { class: "seksjon" },
+    h("h2", {}, "Salene og vilkårene"),
+    h("p", { class: "ingress" }, "Kapasitet er salgbare plasser per oppsett. Tomt felt betyr at salen ikke tilbyr oppsettet. Leien settes sammen av byggeklosser, så nye saler og nye vilkår kan legges inn uten å endre noe annet."),
+    h("div", { class: "verktoylinje" },
+      h("button", { type: "button", onclick: () => leggTilSal() }, "Legg til sal"),
+      h("button", { type: "button", class: "stille", onclick: () => { const C = d.saler.find(x => x.id === "C") ?? d.saler[0]; leggTilSal(C); } }, "Legg til som kopi av den siste")));
+  const liste = h("div", { class: "sal-liste" });
+  for (const s of d.saler) liste.append(salKort(s, res));
+  sek.append(liste);
+  main.append(sek);
+}
+
+function salKort(s, res) {
+  const d = state.data;
+  const standard = SALER_2027.find(x => x.id === s.id);
+  const erEndret = standard && JSON.stringify(stripp(s)) !== JSON.stringify(stripp(standard));
+  const endre = (felt, verdi) => { s[felt] = verdi; reparer(); oppdater(); };
+  const kapFelt = (o, navn) => h("label", { class: "felt" },
+    h("span", {}, navn, o === "sitte" && s.sitteAntatt ? h("span", { class: "merke" }, "antatt") : null),
+    h("input", { type: "number", min: 0, step: 10, value: s.kapasitet[o] ?? "", placeholder: "ingen", onchange: e => { s.kapasitet[o] = e.target.value === "" ? null : Math.max(0, Number(e.target.value)); reparer(); oppdater(); } }));
+  const brukt = d.program.filter(k => k.salId === s.id).length;
+  const r = res.altI[s.id];
+  return h("article", { class: "sal", style: `--c: var(--${fargeFor(s)})` },
+    h("div", { class: "bilde" },
+      s.bilde ? h("img", { src: s.bilde, alt: `Bilde av ${s.navn}` }) : null,
+      s.kilde ? h("div", { class: "kilde" }, "Bilde og opplysninger: ", h("a", { href: s.kilde, target: "_blank", rel: "noopener" }, s.kilde.replace(/^https?:\/\//, ""))) : null),
+    h("div", { class: "tekst" },
+      h("h3", {},
+        h("input", { class: "kort", type: "text", value: s.kort ?? "", placeholder: "A", "aria-label": "Kort navn", maxlength: 3, onchange: e => endre("kort", e.target.value.trim()) }),
+        h("input", { type: "text", value: s.navn, "aria-label": "Navn på salen", onchange: e => endre("navn", e.target.value.trim() || s.navn) }),
+        h("select", { "aria-label": "Farge", onchange: e => endre("farge", e.target.value) }, ...FARGER.map(f => h("option", { value: f, selected: f === s.farge }, FARGENAVN[f]))),
+        s.kunHelSesong ? h("span", { class: "merke" }, "kun hel sesong") : null),
+      h("p", { class: "liten svak" }, `Alt i denne salen: nåverdi ${kr(r.nv)}, trenger ${kr(r.behov)}. ${brukt ? `Valgt på ${brukt} ${brukt === 1 ? "konsert" : "konserter"} i egen plan.` : "Ikke valgt på noen konsert i egen plan."}`),
+      h("div", { class: "felt-rad" },
+        kapFelt("staa", "Stående, plasser"), kapFelt("sitte", "Sittende, plasser"),
+        h("label", { class: "avkryss" }, h("input", { type: "checkbox", checked: !!s.sitteAntatt, onchange: e => endre("sitteAntatt", e.target.checked) }), "Sitteplasser er antatt, ikke oppgitt"),
+        h("label", { class: "avkryss" }, h("input", { type: "checkbox", checked: !!s.kunHelSesong, onchange: e => endre("kunHelSesong", e.target.checked) }), "Kan bare leies for hele sesongen")),
+      h("label", { class: "felt bred", style: "margin-top: 10px" }, h("span", {}, "Beskrivelse og kapasitetsnotat"),
+        h("input", { type: "text", value: s.kapasitetNotat ?? s.beskrivelse ?? "", onchange: e => endre("kapasitetNotat", e.target.value) })),
+      h("div", { class: "byggeklosser" },
+        h("h4", {}, "Leie"),
+        ...s.leie.map((b, i) => klossRad(s, b, i)),
+        h("div", { class: "verktoylinje", style: "margin: 8px 0 0" },
+          h("select", { "aria-label": "Ny byggekloss", onchange: e => { if (!e.target.value) return; s.leie.push(nyKloss(e.target.value)); e.target.value = ""; oppdater(); } },
+            h("option", { value: "" }, "Legg til byggekloss"),
+            h("option", { value: "perKonsert" }, "Fast beløp per konsert"),
+            h("option", { value: "andel" }, "Andel av billettoppgjøret, med minimum"),
+            h("option", { value: "engang" }, "Engangsbeløp for sesongen"),
+            h("option", { value: "sesong" }, "Sesongleie med betalingsplan")))),
+      h("div", { class: "handlinger" },
+        erEndret ? h("button", { type: "button", class: "stille", onclick: () => { Object.assign(s, kopi(standard)); reparer(); oppdater(); } }, "Tilbake til casen") : null,
+        h("button", { type: "button", class: "stille farlig", onclick: () => { if (d.saler.length <= 1) return alert("Minst én sal må være igjen."); if (confirm(`Fjerne ${s.navn}?${brukt ? ` ${brukt} konserter flyttes til en annen sal.` : ""}`)) { d.saler.splice(d.saler.indexOf(s), 1); reparer(); oppdater(); } } }, "Fjern salen"))));
+}
+
+function stripp(s) { const { bilde, kilde, beskrivelse, ...rest } = s; return rest; }
+
+function nyKloss(type) {
+  return { perKonsert: { type, belop: 10000, naar: "konsertmaaned" }, andel: { type, andel: 0.15, minimum: 5000, naar: "maanedEtter" },
+           engang: { type, belop: 20000, tidspunkt: 0 }, sesong: { type, belop: 100000, plan: [{ tidspunkt: 0, andel: 0.5 }, { tidspunkt: 3, andel: 0.5 }] } }[type];
+}
+
+function klossRad(s, b, i) {
+  const endre = (felt, verdi) => { b[felt] = verdi; oppdater(); };
+  const felt = (navn, inp) => h("label", { class: "felt" }, h("span", {}, navn), inp);
+  const naar = () => felt("Betales", h("select", { onchange: e => endre("naar", e.target.value) },
+    h("option", { value: "maanedFoer", selected: b.naar === "maanedFoer" }, "måneden før"),
+    h("option", { value: "konsertmaaned", selected: b.naar === "konsertmaaned" || !b.naar }, "i konsertmåneden"),
+    h("option", { value: "maanedEtter", selected: b.naar === "maanedEtter" }, "måneden etter")));
+  const tid = (verdi, ved) => h("select", { onchange: e => ved(Number(e.target.value)) }, ...MAANEDER.slice(0, 8).map((m, t) => h("option", { value: t, selected: t === verdi }, t === 0 ? "ved start (t0)" : m)));
+  let innhold;
+  if (b.type === "perKonsert") innhold = [h("b", {}, "Per konsert"), felt("Kroner", h("input", { type: "number", min: 0, step: 500, value: b.belop, onchange: e => endre("belop", Number(e.target.value) || 0) })), naar()];
+  else if (b.type === "andel") innhold = [h("b", {}, "Andel av oppgjøret"), felt("Prosent", h("input", { type: "number", min: 0, max: 100, step: 1, value: Math.round(b.andel * 1000) / 10, onchange: e => endre("andel", (Number(e.target.value) || 0) / 100) })), felt("Minst per konsert", h("input", { type: "number", min: 0, step: 500, value: b.minimum ?? 0, onchange: e => endre("minimum", Number(e.target.value) || 0) })), naar()];
+  else if (b.type === "engang") innhold = [h("b", {}, b.navn ?? "Engangsbeløp"), felt("Kroner", h("input", { type: "number", min: 0, step: 1000, value: b.belop, onchange: e => endre("belop", Number(e.target.value) || 0) })), felt("Betales", tid(b.tidspunkt ?? 0, v => endre("tidspunkt", v)))];
+  else innhold = [h("b", {}, b.navn ?? "Sesongleie"), felt("Kroner i alt", h("input", { type: "number", min: 0, step: 1000, value: b.belop, onchange: e => endre("belop", Number(e.target.value) || 0) })),
+    h("div", { class: "plan" }, ...(b.plan ?? []).map((p, j) => h("div", { class: "felt" }, h("span", {}, `Del ${j + 1}, prosent`), h("div", { style: "display:flex; gap:6px; align-items:center" },
+      h("input", { type: "number", min: 0, max: 100, step: 5, value: Math.round(p.andel * 100), style: "width: 7ch", onchange: e => { p.andel = (Number(e.target.value) || 0) / 100; oppdater(); } }),
+      tid(p.tidspunkt, v => { p.tidspunkt = v; oppdater(); }),
+      b.plan.length > 1 ? h("button", { type: "button", class: "stille liten", onclick: () => { b.plan.splice(j, 1); oppdater(); } }, "fjern") : null)))),
+    h("button", { type: "button", class: "stille liten", onclick: () => { b.plan.push({ tidspunkt: 0, andel: 0 }); oppdater(); } }, "Legg til del"),
+    Math.abs((b.plan ?? []).reduce((a, p) => a + p.andel, 0) - 1) > 0.001 ? h("span", { class: "merke feil" }, "delene summerer ikke til 100 %") : null];
+  return h("div", { class: "kloss" }, ...innhold, h("button", { type: "button", class: "stille liten farlig", onclick: () => { s.leie.splice(i, 1); oppdater(); } }, "Fjern"));
+}
+
+function leggTilSal(mal) {
+  const d = state.data;
+  const brukte = new Set(d.saler.map(s => s.id));
+  let id = "D"; while (brukte.has(id)) id = String.fromCharCode(id.charCodeAt(0) + 1);
+  const ny = mal ? { ...kopi(mal), id, kort: id, navn: `${mal.navn} (kopi)`, bilde: null, kilde: null }
+                 : { id, kort: id, navn: "Ny sal", farge: FARGER[d.saler.length % FARGER.length], beskrivelse: "", kilde: null, bilde: null,
+                     kapasitet: { staa: 400, sitte: 200 }, sitteAntatt: true, kapasitetNotat: "", kunHelSesong: false, leie: [nyKloss("perKonsert")] };
+  d.saler.push(ny);
+  oppdater();
+}
+
+/* ---------- Forutsetninger ---------- */
+function renderForutsetninger(main) {
+  const s = state.data.sesong;
+  const felter = [
+    ["billettpris", "Billettpris", "kr", "Oppgaveteksten: 350 kr per betalt billett, alle billetter i 2027", { step: 10 }],
+    ["gebyr", "Billettgebyr", "kr", "Trekkes i oppgjøret fra Flytbillett, 10 kr per betalt billett", { step: 1 }],
+    ["utgiftPerBillett", "Publikumsavhengig utgift", "kr", "10 kr per betalt billett, betalt i konsertmåneden", { step: 1 }],
+    ["pakke", "Artist og produksjon, pakke", "kr", "Rigg & Ro: 60 000 kr per konsert, fast etter signering", { step: 1000 }],
+    ["pakkeDel1Andel", "Del av pakken måneden før", "%", "Halvparten måneden før, resten i konsertmåneden", { step: 5, pst: true }],
+    ["rente", "Realrente per år", "%", "Oppgaveteksten: 4 % real årsrente", { step: 0.5, pst: true }],
+    ["ramme", "Startfinansiering, ramme", "kr", "Maja tror hun kan skaffe 250 000 kr, ikke avklart", { step: 10000 }],
+    ["etterspoerselsfaktor", "Etterspørsel i forhold til 2026", "%", "Majas premiss er 100 %. Samme glider som i Resultater", { step: 5, pst: true }],
+  ];
+  const boks = h("div", { class: "forutsetninger" },
+    h("div", { class: "rad hode" }, h("span", {}, "Forutsetning"), h("span", { class: "hoyre" }, "Verdi"), h("span", {}, "Enhet"), h("span", {}, "Kilde"), h("span")));
+  for (const [felt, navn, enhet, kilde, o] of felter) {
+    const vis = v => o.pst ? Math.round(v * 1000) / 10 : v;
+    const basis = SESONG_2027[felt];
+    boks.append(h("div", { class: "rad" },
+      h("label", { for: `f-${felt}` }, navn),
+      h("input", { id: `f-${felt}`, type: "number", step: o.step, value: vis(s[felt]), onchange: e => { const v = Number(e.target.value); s[felt] = o.pst ? v / 100 : v; oppdater(); } }),
+      h("span", { class: "svak" }, enhet),
+      h("span", { class: "liten svak" }, kilde),
+      s[felt] !== basis ? h("button", { type: "button", class: "stille liten", onclick: () => { s[felt] = basis; oppdater(); } }, `Tilbake til casen (${vis(basis)} ${enhet})`) : h("span", { class: "liten svak" }, "Som i casen")));
+  }
+  boks.append(h("div", { class: "rad" },
+    h("label", { for: "f-konv" }, "Diskontering per måned"),
+    h("select", { id: "f-konv", onchange: e => { s.konvensjon = e.target.value; oppdater(); } },
+      h("option", { value: "aar", selected: s.konvensjon !== "maaned" }, "(1 + r)^(t/12)"),
+      h("option", { value: "maaned", selected: s.konvensjon === "maaned" }, "(1 + r/12)^t")),
+    h("span"), h("span", { class: "liten svak" }, "Arbeidsboka bruker (1 + r)^(t/12). Den andre gir litt lavere nåverdi"),
+    s.konvensjon !== "aar" ? h("button", { type: "button", class: "stille liten", onclick: () => { s.konvensjon = "aar"; oppdater(); } }, "Tilbake til casen") : h("span", { class: "liten svak" }, "Som i casen")));
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, "Forutsetningene for sesongen"),
+    h("p", { class: "ingress" }, "Tallene fra Majas e-post og vedleggene. Alt kan endres, og alt kan settes tilbake. Faste 2026-kroner, før skatt og finansiering."),
+    boks,
+    h("p", { class: "notat", style: "margin-top: 14px" }, "Det som ikke kan endres her: strukturen i betalingene. Billettoppgjøret kommer alltid måneden etter konserten, publikumsutgiften i konsertmåneden, og pakken i to deler. Det er slik casen er lagt opp, og slik arbeidsboka regner.")));
+}
+
+document.addEventListener("DOMContentLoaded", init);
+
+
+})();

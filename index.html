@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Konsertplan</title>
+<meta name="description" content="Lønnsomhet og finansieringsbehov per konsert for en konsertsesong. Bygget for Sceneskift våren 2027.">
+<link rel="stylesheet" href="css/konsertplan.css">
+</head>
+<body>
+<header class="topp">
+  <div class="topp-venstre">
+    <h1 class="gaffa"><span>Konsertplan</span></h1>
+    <div class="sesongnavn">
+      <input id="sesongnavn" type="text" aria-label="Navn på sesongen" spellcheck="false">
+      <p class="undertekst" id="undertekst"></p>
+    </div>
+  </div>
+  <div class="topp-hoyre">
+    <button type="button" id="knapp-aapne">Åpne sesong</button>
+    <input type="file" id="fil" accept="application/json,.json" hidden>
+    <button type="button" id="knapp-lagre">Lagre sesong</button>
+    <button type="button" id="knapp-nullstill" class="stille">Nullstill alt til Sceneskift 2027</button>
+  </div>
+</header>
+
+<nav class="faner" aria-label="Deler av verktøyet">
+  <button type="button" data-fane="program" aria-pressed="true">Program</button>
+  <button type="button" data-fane="resultater">Resultater</button>
+  <button type="button" data-fane="saler">Saler</button>
+  <button type="button" data-fane="forutsetninger">Forutsetninger</button>
+</nav>
+
+<section class="stripe" id="stripe" aria-label="Resultatene akkurat nå"></section>
+
+<main id="innhold"></main>
+
+<footer class="bunn">
+  <p>Konsertplan er laget til MET3 Arbeidskrav 2 ved NHH (Bjarte Laa, Petter Garli og Maxime Boudailliez). Sceneskift, salene og tallene er fiktive og laget for undervisning. Alt regnes i nettleseren og lagres bare på denne maskinen.</p>
+</footer>
+
+<script src="konsertplan.js"></script>
+</body>
+</html>

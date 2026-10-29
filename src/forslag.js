@@ -34,8 +34,8 @@ export function forslagForKonsert(sesong, saler, konsert) {
   let valg, hvorfor;
   if (medPlass.length) {
     valg = medPlass.reduce((a, b) => (b.leie < a.leie ? b : a));
-    const andre = medPlass.filter(v => v !== valg).map(v => `${v.sal.kort ?? v.sal.navn} ${kr(v.leie)}`);
-    hvorfor = `${oppsettTekst(oppsett)} ut fra sjangeren. ${valg.sal.navn} har plass til ${Math.round(onsket)} og er billigst med ${kr(valg.leie)} i leie` +
+    const andre = medPlass.filter(v => v !== valg).map(v => `${v.sal.kort ?? v.sal.navn} ${krTekst(v.leie)}`);
+    hvorfor = `${oppsettTekst(oppsett)} ut fra sjangeren. ${valg.sal.navn} har plass til ${Math.round(onsket)} og er billigst med ${krTekst(valg.leie)} i leie` +
       (andre.length ? ` (${andre.join(", ")})` : "") +
       (vurdert.length > medPlass.length ? `. ${vurdert.filter(v => v.kappet).map(v => `${v.sal.navn} har bare plass til ${v.kap}`).join(", ")}` : "") + ".";
   } else {
@@ -45,5 +45,5 @@ export function forslagForKonsert(sesong, saler, konsert) {
   return { oppsett, salId: valg.sal.id, hvorfor, kappet: valg.kappet, vurdert };
 }
 
-const kr = v => Math.round(v).toLocaleString("nb-NO") + " kr";
+const krTekst = v => Math.round(v).toLocaleString("nb-NO") + " kr";
 const oppsettTekst = o => (o === "sitte" ? "Sittende" : "Stående");
