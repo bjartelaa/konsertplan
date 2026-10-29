@@ -75,6 +75,12 @@ function init() {
   for (const b of document.querySelectorAll(".faner button")) b.addEventListener("click", () => { state.fane = b.dataset.fane; history.replaceState(null, "", "#" + state.fane); render(); });
   window.addEventListener("hashchange", fraHash);
   if (faner.includes(location.hash.replace("#", ""))) state.fane = location.hash.replace("#", "");
+  // Åpnet fra presentasjonen (MET3): vis lenke tilbake. Maja ser den ikke
+  if (new URLSearchParams(location.search).get("fra") === "presentasjon") {
+    const tilbake = document.getElementById("til-presentasjon");
+    tilbake.hidden = false;
+    tilbake.addEventListener("click", e => { if (history.length > 1) { e.preventDefault(); history.back(); } });
+  }
   visForklaringer();
   render();
 }
@@ -135,17 +141,31 @@ function renderStripe(res) {
   const el = document.getElementById("stripe");
   el.replaceChildren();
   const d = state.data;
+  const s = d.sesong;
+  const stor = state.fane === "resultater";
   const deler = [
     { navn: "Egen plan", merke: res.blandet ? h("span", { class: "merke varsel" }, "utenfor casen") : null, farge: "gronn", r: res.egen },
-    ...d.saler.map(s => ({ navn: `Alt i ${salTittel(s)}`, farge: fargeFor(s), r: res.altI[s.id] })),
+    ...d.saler.map(x => ({ navn: `Alt i ${salTittel(x)}`, farge: fargeFor(x), r: res.altI[x.id], bilde: stor && x.bilde ? mini(x) : null })),
   ];
   for (const p of deler) {
+    const r = p.r;
     el.append(h("div", { class: "stripe-del", style: `--c: var(--${p.farge})` },
-      h("div", { class: "navn" }, p.navn, p.merke),
-      h("div", { class: `nv tall ${p.r.nv < 0 ? "minus" : ""}` }, kr(p.r.nv)),
-      h("div", { class: "rad" }, "Trenger ", h("b", { class: "tall" }, kr(p.r.behov))),
-      statusTekst(p.r)));
+      h("div", { class: "navn" }, p.bilde, p.navn, p.merke),
+      h("div", { class: `nv tall ${r.nv < 0 ? "minus" : ""}` }, kr(r.nv), stor ? h("span", { class: "nv-etikett" }, "nåverdi") : null),
+      h("div", { class: "rad" }, stor ? "Trenger underveis" : "Trenger", h("b", { class: "tall" }, kr(r.behov))),
+      stor ? h("div", { class: "rad" }, "Netto, udiskontert", h("b", { class: "tall" }, kr(r.netto))) : null,
+      ...(stor && r.laan > 0 ? [
+        h("div", { class: "rad" }, "Lån ut over rammen", h("b", { class: "tall minus" }, kr(r.laan))),
+        h("div", { class: "rad" }, `Rente, ${pst(s.laanRente ?? 0)} p.a.`, h("b", { class: "tall minus" }, kr(r.rentekostnad))),
+        h("div", { class: "rad" }, "Nåverdi etter rente", h("b", { class: "tall" }, kr(r.nvEtterRente))),
+      ] : []),
+      statusTekst(r)));
   }
+  // Avstå er alltid et valg, så den står sist som en liten bolk
+  el.append(h("div", { class: "stripe-del liten", style: "--c: var(--graa)" },
+    h("div", { class: "navn" }, "Avstå"),
+    h("div", { class: "nv tall" }, kr(0)),
+    h("div", { class: "rad" }, "Ingen risiko, ingen inntekt")));
 }
 
 /* ---------- Program ---------- */
@@ -268,27 +288,9 @@ function fyllResultater(innhold, res) {
   const s = d.sesong;
   const ref = salAv(state.referanse) ?? d.saler[0];
 
-  const kort = (navn, farge, r, ekstra, bilde) => h("div", { class: "kort", style: `--c: var(--${farge})` },
-    h("h3", {}, bilde, navn, ekstra),
-    h("div", { class: `stor ${r.nv < 0 ? "minus" : ""}` }, kr(r.nv)),
-    h("div", { class: "stor-etikett" }, "nåverdi"),
-    h("dl", {},
-      h("dt", {}, "Trenger underveis"), h("dd", {}, kr(r.behov)),
-      h("dt", {}, "Netto, udiskontert"), h("dd", {}, kr(r.netto)),
-      ...(r.laan > 0 ? [
-        h("dt", {}, "Lån ut over rammen"), h("dd", { class: "minus" }, kr(r.laan)),
-        h("dt", {}, `Rente, ${pst(s.laanRente ?? 0)} p.a.`), h("dd", { class: "minus" }, kr(r.rentekostnad)),
-        h("dt", {}, "Nåverdi etter rente"), h("dd", {}, kr(r.nvEtterRente)),
-      ] : [])),
-    statusTekst(r));
   innhold.append(h("section", { class: "seksjon" },
-    h("h2", {}, "Hele sesongen"),
-    fork("p", "ingress", "Nåverdi med 4 % realrente per år, og det største beløpet Sceneskift ligger ute med underveis, målt ved månedsslutt. Avstå gir null i begge. Ligger behovet over rammen, vises lånet som trengs (det saldoen ligger under rammen, som en kassekreditt) og renten på det. Renten holdes utenfor nåverdien, slik casen krever, og vises som egen linje."),
-    h("div", { class: "kort-rad" },
-      kort("Egen plan", "gronn", res.egen, res.blandet ? h("span", { class: "merke varsel" }, "utenfor casen") : null),
-      ...d.saler.map(x => kort(`Alt i ${salTittel(x)}`, fargeFor(x), res.altI[x.id], null, x.bilde ? mini(x) : null)),
-      kort("Avstå", "graa", res.avstaa)),
-    res.blandet ? h("p", { class: "varsel", style: "margin-top: 16px" }, `Egen plan bruker ${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(" og ")}. Casen sier at avtalene gjelder hele programmet, så en blanding krever at utleierne godtar enkeltkonserter. Vis det som et alternativ Maja kan ta opp før signering, ikke som et tilbud som finnes.`) : null));
+    fork("p", "ingress", "Stripa øverst viser nåverdi med 4 % realrente per år, og det største beløpet Sceneskift ligger ute med underveis, målt ved månedsslutt. Avstå gir null i begge. Ligger behovet over rammen, vises lånet som trengs (det saldoen ligger under rammen, som en kassekreditt) og renten på det. Renten holdes utenfor nåverdien, slik casen krever, og vises som egen linje."),
+    res.blandet ? h("p", { class: "varsel" }, `Egen plan bruker ${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(" og ")}. Casen sier at avtalene gjelder hele programmet, så en blanding krever at utleierne godtar enkeltkonserter. Vis det som et alternativ Maja kan ta opp før signering, ikke som et tilbud som finnes.`) : null));
 
   const etiketter = res.egen.saldo.map((_, t) => MAANEDER[t] ?? `M${t}`);
   const serier = [
