@@ -16,6 +16,7 @@
 //   pakke, del 1     − pakke × pakkeDel1Andel        i m − 1 (t0 for første måned)
 //   pakke, del 2     − pakke × (1 − pakkeDel1Andel)  i m
 //   leie             etter salens byggeklosser
+//   N = min(forventetSalg × etterspørselsfaktor × salens lokaleeffekt, plasser i salen)
 //
 // Byggeklosser for leie (sal.leie er en liste):
 //   { type: "perKonsert", belop, naar }                 naar: "konsertmaaned" | "maanedEtter" | "maanedFoer"
@@ -34,7 +35,10 @@ function kapasitet(sal, oppsett) {
 /** Antall betalte billetter for en konsert i en gitt sal og oppsett. */
 function billetter(sesong, konsert, sal, oppsett = konsert.oppsett) {
   const faktor = sesong.etterspoerselsfaktor ?? 1;
-  const onsket = (konsert.forventetSalg ?? 0) * faktor;
+  // Lokaleeffekt (arbeidsboka Forutsetninger D52:D54): salget i salen i forhold til etterspørselen.
+  // 100 % er Majas premiss, lokalet påvirker ikke salget. Taket i salen gjelder uansett.
+  const lokal = sal?.lokaleeffekt ?? 1;
+  const onsket = (konsert.forventetSalg ?? 0) * faktor * lokal;
   const kap = kapasitet(sal, oppsett);
   if (kap === null) return { n: 0, onsket, kap: null, kappet: onsket > 0, mulig: false };
   const n = Math.min(onsket, kap);
@@ -171,6 +175,30 @@ function beregnAlle(sesong, saler, program) {
   return { altI, egen, blandet, avstaa: { nv: 0, netto: 0, behov: 0, holderRammen: true, laan: 0, rentekostnad: 0, nvEtterRente: 0, maanederMedLaan: 0 } };
 }
 
+/* ---------- Scenarioer ----------
+ * Et scenario setter to forutsetninger: etterspørselsfaktoren og pakkeprisen (som arket Forutsetninger
+ * i arbeidsboka). Det finnes ingen egen «aktiv scenario»-tilstand: det aktive scenarioet er det som
+ * stemmer med verdiene akkurat nå. Endres en glider, stemmer ingen, og siden viser «Egne verdier».
+ */
+const lik = (a, b) => Math.abs((a ?? 0) - (b ?? 0)) < 1e-9;
+
+/** Scenarioet som stemmer med sesongens etterspørselsfaktor og pakkepris, eller null. */
+function aktivtScenario(sesong) {
+  return (sesong.scenarioer ?? []).find(sc => lik(sc.etterspoerselsfaktor, sesong.etterspoerselsfaktor ?? 1) && lik(sc.pakke, sesong.pakke)) ?? null;
+}
+
+/** Setter scenarioets verdier på sesongen (endrer objektet) og returnerer det. */
+function velgScenario(sesong, scenario) {
+  sesong.etterspoerselsfaktor = scenario.etterspoerselsfaktor;
+  sesong.pakke = scenario.pakke;
+  return sesong;
+}
+
+/** Alle resultatene for hvert scenario: [{ scenario, res }], der res er beregnAlle med scenarioets verdier. */
+function beregnScenarioer(sesong, saler, program) {
+  return (sesong.scenarioer ?? []).map(scenario => ({ scenario, res: beregnAlle(velgScenario({ ...sesong }, scenario), saler, program) }));
+}
+
 /** Dyp kopi uten funksjoner, til lagring og «tilbake til casen». */
 const kopi = x => JSON.parse(JSON.stringify(x));
 
@@ -198,13 +226,12 @@ function oppsettForSjanger(sjanger) {
 function forslagForKonsert(sesong, saler, konsert) {
   const oppsett = oppsettForSjanger(konsert.sjanger) ?? konsert.oppsett ?? "staa";
   const kandidater = saler.filter(s => !s.kunHelSesong);
-  const onsket = (konsert.forventetSalg ?? 0) * (sesong.etterspoerselsfaktor ?? 1);
   const vurdert = kandidater.map(s => {
     const b = billetter(sesong, konsert, s, oppsett);
     if (!b.mulig) return null;
     const leie = leieForKonsert(sesong, s, b.n).sum;
     const bidrag = b.n * (sesong.billettpris - sesong.gebyr - sesong.utgiftPerBillett) - leie;
-    return { sal: s, n: b.n, kap: b.kap, kappet: b.kappet, leie, bidrag };
+    return { sal: s, n: b.n, onsket: b.onsket, kap: b.kap, kappet: b.kappet, leie, bidrag };
   }).filter(Boolean);
   if (vurdert.length === 0) return null;
   const medPlass = vurdert.filter(v => !v.kappet);
@@ -212,12 +239,12 @@ function forslagForKonsert(sesong, saler, konsert) {
   if (medPlass.length) {
     valg = medPlass.reduce((a, b) => (b.leie < a.leie ? b : a));
     const andre = medPlass.filter(v => v !== valg).map(v => `${v.sal.kort ?? v.sal.navn} ${krTekst(v.leie)}`);
-    hvorfor = `${oppsettTekst(oppsett)} ut fra sjangeren. ${valg.sal.navn} har plass til ${Math.round(onsket)} og er billigst med ${krTekst(valg.leie)} i leie` +
+    hvorfor = `${oppsettTekst(oppsett)} ut fra sjangeren. ${valg.sal.navn} har plass til ${Math.round(valg.onsket)} og er billigst med ${krTekst(valg.leie)} i leie` +
       (andre.length ? ` (${andre.join(", ")})` : "") +
       (vurdert.length > medPlass.length ? `. ${vurdert.filter(v => v.kappet).map(v => `${v.sal.navn} har bare plass til ${v.kap}`).join(", ")}` : "") + ".";
   } else {
     valg = vurdert.reduce((a, b) => (b.bidrag > a.bidrag ? b : a));
-    hvorfor = `${oppsettTekst(oppsett)} ut fra sjangeren. Ingen sal har plass til ${Math.round(onsket)} ${oppsett === "sitte" ? "sittende" : "stående"}. ${valg.sal.navn} gir høyest bidrag, men salget kappes til ${valg.kap}.`;
+    hvorfor = `${oppsettTekst(oppsett)} ut fra sjangeren. Ingen sal har plass til ${Math.round(valg.onsket)} ${oppsett === "sitte" ? "sittende" : "stående"}. ${valg.sal.navn} gir høyest bidrag, men salget kappes til ${valg.kap}.`;
   }
   return { oppsett, salId: valg.sal.id, hvorfor, kappet: valg.kappet, vurdert };
 }
@@ -315,15 +342,32 @@ const SESONG_2027 = {
   ramme: 250000,             // startfinansiering Maja tror hun kan skaffe
   etterspoerselsfaktor: 1,   // 1 = Majas premiss: samme salg som 2026
   laanRente: 0.12,           // årlig rente på lån ut over rammen (kassekreditt). Gruppas antakelse, ikke fra casen
+  scenarioer: [],            // fylles med SCENARIOER_2027 under
   maanedsnavn: ["Før januar", "Januar", "Februar", "Mars", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Desember"],
 };
+
+// Scenarioene fra arbeidsboka (Forutsetninger B13:F17). Hvert scenario setter etterspørselsfaktoren og
+// pakkeprisen. Nivåene og begrunnelsene er gruppas, teksten er den samme som i arbeidsboka.
+const SCENARIOER_2027 = [
+  { navn: "Basis", etterspoerselsfaktor: 1, pakke: 60000,
+    begrunnelse: "Majas premiss: samme salg som tilsvarende konsert i 2026. Rigg & Ro-tilbudet på 60 000 kr." },
+  { navn: "Lav etterspørsel", etterspoerselsfaktor: 0.8, pakke: 60000,
+    begrunnelse: "Student- og tidligrabatten forsvinner. 1 203 av 3 380 betalte billetter i 2026 (36 %) var rabatterte og blir 9 til 17 % dyrere. Nivået er gruppas antakelse." },
+  { navn: "Høyere pakkepris", etterspoerselsfaktor: 1, pakke: 66000,
+    begrunnelse: "Rigg & Ro kan revidere tilbudet før signering. 10 % høyere pris er gruppas antakelse." },
+  { navn: "Samlet", etterspoerselsfaktor: 0.8, pakke: 66000,
+    begrunnelse: "Lav etterspørsel og høyere pakkepris samtidig (oppgavens samlede scenario). Høy etterspørsel er ikke med." },
+  { navn: "Høy etterspørsel", etterspoerselsfaktor: 1.2, pakke: 60000, oppside: true,
+    begrunnelse: "Oppside: 20 % flere betalte billetter enn i 2026. Gruppas antakelse, inngår ikke i beslutningsreglene." },
+];
+SESONG_2027.scenarioer = SCENARIOER_2027;
 
 const SALER_2027 = [
   {
     id: "A", navn: "Lune Sal", kort: "A", farge: "blaa",
     beskrivelse: "Liten kultursal i et tidligere snekkerverksted. Lav scene, intimt.",
     kilde: "https://alu042.github.io/met3-lune-sal/", bilde: "img/lune-sal.webp",
-    kapasitet: { staa: null, sitte: 250 }, sitteAntatt: false,
+    kapasitet: { staa: null, sitte: 250 }, sitteAntatt: false, lokaleeffekt: 1,
     kapasitetNotat: "Tilbudet: 250 salgbare plasser. Nettsiden sier 270 seter. Regnes som sittende sal uten ståoppsett (antatt).",
     kunHelSesong: false,
     leie: [{ type: "perKonsert", belop: 9000, naar: "konsertmaaned" }],
@@ -332,7 +376,7 @@ const SALER_2027 = [
     id: "B", navn: "Søyleverket", kort: "B", farge: "gul",
     beskrivelse: "Kulturrom med flatt gulv, fast scene og løse stoler. Fast sesongleie.",
     kilde: "https://alu042.github.io/met3-soyleverket/", bilde: "img/soyleverket.webp",
-    kapasitet: { staa: 450, sitte: 250 }, sitteAntatt: true,
+    kapasitet: { staa: 450, sitte: 250 }, sitteAntatt: true, lokaleeffekt: 1,
     kapasitetNotat: "Tilbudet: 450 salgbare plasser. Nettsiden sier inntil 500 personer. Sitteplasser 250 er antatt (løse stoler på flatt gulv).",
     kunHelSesong: true,
     leie: [
@@ -344,7 +388,7 @@ const SALER_2027 = [
     id: "C", navn: "Skarvkaien", kort: "C", farge: "rosa",
     beskrivelse: "Havnelager med fast scene og åpent gulv. Leien følger billettoppgjøret.",
     kilde: "https://alu042.github.io/met3-skarvkaien/", bilde: "img/skarvkaien.webp",
-    kapasitet: { staa: 450, sitte: 200 }, sitteAntatt: true,
+    kapasitet: { staa: 450, sitte: 200 }, sitteAntatt: true, lokaleeffekt: 1,
     kapasitetNotat: "Tilbudet: 450 salgbare plasser. Nettsiden sier inntil 490 stående. Sitteplasser 200 er antatt (kan rigges sittende).",
     kunHelSesong: false,
     leie: [{ type: "andel", andel: 0.18, minimum: 7500, naar: "maanedEtter" }],
@@ -613,8 +657,9 @@ function visForklaringer() {
 function reparer() {
   const d = state.data;
   d.sesong = { ...kopi(SESONG_2027), ...d.sesong };
+  if (!Array.isArray(d.sesong.scenarioer) || !d.sesong.scenarioer.length) d.sesong.scenarioer = kopi(SCENARIOER_2027);
   if (!d.saler.length) d.saler = kopi(SALER_2027);
-  for (const s of d.saler) { s.leie ??= []; s.kapasitet ??= { staa: null, sitte: null }; s.farge ??= "graa"; }
+  for (const s of d.saler) { s.leie ??= []; s.kapasitet ??= { staa: null, sitte: null }; s.farge ??= "graa"; s.lokaleeffekt ??= 1; }
   const perKonsert = salerPerKonsert();
   const standardProgram = standardSesong().program;
   for (const k of d.program) {
@@ -639,7 +684,8 @@ function beregn() { const d = state.data; return beregnAlle(d.sesong, d.saler, d
 function render() {
   const d = state.data;
   document.getElementById("sesongnavn").value = d.sesong.navn;
-  document.getElementById("undertekst").textContent = `${d.program.length} konserter, ${d.saler.length} saler, ramme ${kr(d.sesong.ramme)}`;
+  const sc = aktivtScenario(d.sesong);
+  document.getElementById("undertekst").textContent = `${d.program.length} konserter, ${d.saler.length} saler, ramme ${kr(d.sesong.ramme)}. Scenario: ${sc ? sc.navn : "egne verdier"}`;
   for (const b of document.querySelectorAll(".faner button")) b.setAttribute("aria-pressed", String(b.dataset.fane === state.fane));
   document.body.classList.toggle("fane-resultater", state.fane === "resultater");
   const res = beregn();
@@ -794,8 +840,27 @@ function renderResultater(main, res) {
     lagre();
     if (venter) return;
     venter = true;
-    requestAnimationFrame(() => { venter = false; const r = beregn(); renderStripe(r); innhold.replaceChildren(); fyllResultater(innhold, r); });
+    requestAnimationFrame(() => { venter = false; const r = beregn(); renderStripe(r); tegnScenarioer(); innhold.replaceChildren(); fyllResultater(innhold, r); });
   };
+  // Scenariovelgeren tegnes på nytt når gliderne flyttes, så den viser «Egne verdier» når ingen stemmer
+  const scenarioBoks = h("div", { class: "scenarioer" });
+  const begrunnelse = h("p", { class: "scenario-begrunnelse" });
+  const tegnScenarioer = () => {
+    const aktiv = aktivtScenario(s);
+    scenarioBoks.replaceChildren(...s.scenarioer.map(sc => h("button", { type: "button", class: `scenario${sc.oppside ? " oppside" : ""}`, "aria-pressed": String(sc === aktiv),
+      onclick: () => { velgScenario(s, sc); render(); } },
+      h("span", { class: "scenario-navn" }, sc.navn, sc.oppside ? h("span", { class: "merke" }, "oppside") : null),
+      h("span", { class: "scenario-verdier tall" }, `${pst(sc.etterspoerselsfaktor)} salg, ${kr(sc.pakke)}`))),
+      h("div", { class: `scenario egne${aktiv ? "" : " aktiv"}` },
+        h("span", { class: "scenario-navn" }, "Egne verdier"),
+        h("span", { class: "scenario-verdier tall" }, aktiv ? "flytt en glider" : `${pst(s.etterspoerselsfaktor)} salg, ${kr(s.pakke)}`)));
+    begrunnelse.textContent = aktiv ? aktiv.begrunnelse : "Verdiene fra gliderne. Ingen av scenarioene i arbeidsboka stemmer akkurat med dem.";
+  };
+  tegnScenarioer();
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, "Scenario"),
+    fork("p", "ingress", "Ett scenario om gangen, som i arbeidsboka. Scenarioet setter etterspørselen i forhold til 2026 og pakkeprisen per konsert. Alt på siden regnes på nytt. Nivåene er gruppas antakelser, ikke sannsynligheter, og Høy etterspørsel er en oppside som ikke inngår i beslutningsreglene."),
+    scenarioBoks, begrunnelse));
   const glider = (navn, felt, min, max, steg, vis, basis) => {
     const inp = h("input", { type: "range", min, max, step: steg, value: s[felt], "aria-label": navn });
     const verdi = h("b", { class: "tall" });
@@ -809,8 +874,8 @@ function renderResultater(main, res) {
     return h("div", { class: "glider" }, h("label", {}, h("span", {}, navn), verdi), inp, h("div", { class: "ende" }, h("span", {}, vis(min)), h("span", {}, vis(max))));
   };
   main.append(h("section", { class: "seksjon" },
-    h("h2", {}, "Hva om salget eller pakkeprisen blir en annen?"),
-    fork("p", "ingress", "Dra i gliderne. Alt på siden regnes på nytt. Basis er Majas premiss: samme salg som i 2026 og 60 000 kr per konsert."),
+    h("h2", {}, "Finjuster: hva om salget eller pakkeprisen blir noe annet?"),
+    fork("p", "ingress", "Dra i gliderne for verdier mellom scenarioene. Alt på siden regnes på nytt. Basis er Majas premiss: samme salg som i 2026 og 60 000 kr per konsert."),
     h("div", { class: "glidere" },
       glider("Etterspørsel i forhold til 2026", "etterspoerselsfaktor", 0.5, 1.3, 0.01, pst, 1),
       glider("Pakkepris per konsert", "pakke", 48000, 78000, 500, kr, 60000))));
@@ -825,7 +890,10 @@ function fyllResultater(innhold, res) {
 
   innhold.append(h("section", { class: "seksjon" },
     fork("p", "ingress", "Stripa øverst viser nåverdi med 4 % realrente per år, og det største beløpet Sceneskift ligger ute med underveis, målt ved månedsslutt. Avstå gir null i begge. Ligger behovet over rammen, vises lånet som trengs (det saldoen ligger under rammen, som en kassekreditt) og renten på det. Renten holdes utenfor nåverdien, slik casen krever, og vises som egen linje."),
-    res.blandet ? h("p", { class: "varsel" }, `Egen plan bruker ${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(" og ")}. Casen sier at avtalene gjelder hele programmet, så en blanding krever at utleierne godtar enkeltkonserter. Vis det som et alternativ Maja kan ta opp før signering, ikke som et tilbud som finnes.`) : null));
+    res.blandet ? h("p", { class: "varsel" }, `Egen plan bruker ${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(" og ")}. Casen sier at avtalene gjelder hele programmet, så en blanding krever at utleierne godtar enkeltkonserter. Vis det som et alternativ Maja kan ta opp før signering, ikke som et tilbud som finnes.`) : null,
+    lokaleeffektMerknad()));
+
+  innhold.append(konsekvenstabell(res));
 
   const etiketter = res.egen.saldo.map((_, t) => MAANEDER[t] ?? `M${t}`);
   const serier = [
@@ -856,6 +924,47 @@ function fyllResultater(innhold, res) {
       h("thead", {}, h("tr", {}, h("th", {}, "Kroner"), ...etiketter.map(e => h("th", { class: "hoyre" }, e)))),
       h("tbody", {}, rad("Billettoppgjør", L.billetter), rad("Publikumsutgift", L.utgift), rad("Pakke", L.pakke), rad("Leie", L.leie), rad("Sum i måneden", res.egen.cf), rad("Saldo", res.egen.saldo, "saldo"),
         ...(res.egen.laan > 0 ? [rad("Under rammen, lån", res.egen.trekk.map(x => -x)), rad("Rente på lånet", res.egen.renter.map(x => -x))] : []))))));
+}
+
+/** Merknad når en sal har lokaleeffekt ulik 100 %, så det ikke skjer i stillhet. */
+function lokaleeffektMerknad() {
+  const saler = state.data.saler.filter(s => (s.lokaleeffekt ?? 1) !== 1);
+  if (!saler.length) return null;
+  return h("p", { class: "varsel", style: "margin-top: 12px" }, h("span", { class: "merke varsel" }, "følsomhet"), " ",
+    `Lokaleeffekt: ${saler.map(s => `${s.navn} ${pst(s.lokaleeffekt)}`).join(", ")}. Salget i ${saler.length === 1 ? "den salen" : "de salene"} regnes som den andelen av etterspørselen, og taket i salen gjelder fortsatt. Majas premiss er 100 %. Endres under Saler.`);
+}
+
+/** Konsekvenstabellen fra oppgaveteksten: én rad per handling (også å avstå), én kolonne per scenario. Nåverdi og om rammen holder. */
+function konsekvenstabell(res) {
+  const d = state.data;
+  const s = d.sesong;
+  const aktiv = aktivtScenario(s);
+  const alleSc = beregnScenarioer(s, d.saler, d.program);
+  const hodeKlasse = sc => `${sc === aktiv ? "aktiv" : ""}${sc.oppside ? " oppside" : ""}`;
+  const celle = (sc, r) => {
+    const over = s.ramme != null && r.behov > s.ramme;
+    return h("td", { class: `hoyre ${hodeKlasse(sc)}` },
+      h("div", { class: `tall nv-celle ${r.nv < 0 ? "minus" : ""}` }, kr(r.nv)),
+      h("div", { class: `liten tall ${over ? "minus" : "svak"}` }, r.behov ? `trenger ${tall(r.behov)}${over ? ", over rammen" : ""}` : "trenger 0"));
+  };
+  const rader = [
+    ...d.saler.map(x => ({ navn: `Alt i ${salTittel(x)}`, farge: fargeFor(x), hent: r => r.altI[x.id] })),
+    ...(res.blandet ? [{ navn: "Egen plan", farge: "gronn", merke: "utenfor casen", hent: r => r.egen }] : []),
+    { navn: "Avstå", farge: "graa", hent: r => r.avstaa },
+  ];
+  const holder = sc => rader.filter(r => r.navn !== "Avstå" && sc.res && r.hent(sc.res).holderRammen).map(r => r.navn.replace("Alt i ", "").split(":")[0]);
+  return h("section", { class: "seksjon" },
+    h("h2", {}, "Alle scenarioene samlet"),
+    fork("p", "ingress", "Konsekvenstabellen fra oppgaveteksten: én rad per handling, også å avstå, og én kolonne per scenario. Nåverdien står stort, og under hvor mye Sceneskift må ligge ute med. Rødt betyr tap eller over rammen. Den aktive kolonnen er valgt over."),
+    h("div", { class: "tabellramme" }, h("table", { class: "konsekvens" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Handling"), ...alleSc.map(({ scenario: sc }) => h("th", { class: `hoyre ${hodeKlasse(sc)}` }, sc.navn, h("div", { class: "liten svak tall" }, `${pst(sc.etterspoerselsfaktor)} salg, ${kr(sc.pakke)}`))))),
+      h("tbody", {}, ...rader.map(rad => h("tr", { style: `--c: var(--${rad.farge})` },
+        h("td", { class: "handling" }, h("span", { class: "prikk" }), rad.navn, rad.merke ? h("span", { class: "merke varsel" }, rad.merke) : null),
+        ...alleSc.map(({ scenario: sc, res: r }) => celle(sc, rad.hent(r)))))),
+      s.ramme == null ? null : h("tfoot", {}, h("tr", {}, h("td", {}, "Holder rammen"), ...alleSc.map(({ scenario: sc, res: r }) => {
+        const ok = holder({ res: r });
+        return h("td", { class: `hoyre liten ${hodeKlasse(sc)} ${ok.length ? "" : "minus"}` }, ok.length ? ok.join(", ") : "ingen");
+      }))))));
 }
 
 function padTil(arr, n) { const ut = arr.slice(); while (ut.length < n) ut.push(ut[ut.length - 1]); return ut; }
@@ -909,7 +1018,13 @@ function salKort(s, res) {
       h("div", { class: "felt-rad" },
         kapFelt("staa", "Stående, plasser"), kapFelt("sitte", "Sittende, plasser"),
         h("label", { class: "avkryss" }, h("input", { type: "checkbox", checked: !!s.sitteAntatt, onchange: e => endre("sitteAntatt", e.target.checked) }), "Sitteplasser er antatt"),
-        h("label", { class: "avkryss" }, h("input", { type: "checkbox", checked: !!s.kunHelSesong, onchange: e => endre("kunHelSesong", e.target.checked) }), "Kun hel sesong")),
+        h("label", { class: "avkryss" }, h("input", { type: "checkbox", checked: !!s.kunHelSesong, onchange: e => endre("kunHelSesong", e.target.checked) }), "Kun hel sesong"),
+        h("label", { class: "felt" },
+          h("span", {}, "Lokaleeffekt på salget", h("span", { class: "merke" }, "følsomhet")),
+          h("div", { class: "prosentfelt" },
+            h("input", { type: "number", min: 0, max: 300, step: 5, value: Math.round((s.lokaleeffekt ?? 1) * 1000) / 10, "aria-label": "Lokaleeffekt i prosent", onchange: e => endre("lokaleeffekt", Math.max(0, Number(e.target.value) || 0) / 100) }),
+            h("span", { class: "svak" }, "%")))),
+      fork("p", "notat", "Lokaleeffekt: salget her i forhold til etterspørselen. 100 % er Majas premiss (lokalet påvirker ikke salget), 85 % betyr 15 % færre kjøpere når konserten er her. Taket i salen gjelder uansett. Gruppas egen følsomhet, som i arbeidsboka."),
       fork("label", "felt bred", h("span", {}, "Beskrivelse og kapasitetsnotat"),
         h("input", { type: "text", value: s.kapasitetNotat ?? s.beskrivelse ?? "", onchange: e => endre("kapasitetNotat", e.target.value) })),
       h("div", { class: "byggeklosser" },

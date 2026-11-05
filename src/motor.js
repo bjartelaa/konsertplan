@@ -11,6 +11,7 @@
 //   pakke, del 1     − pakke × pakkeDel1Andel        i m − 1 (t0 for første måned)
 //   pakke, del 2     − pakke × (1 − pakkeDel1Andel)  i m
 //   leie             etter salens byggeklosser
+//   N = min(forventetSalg × etterspørselsfaktor × salens lokaleeffekt, plasser i salen)
 //
 // Byggeklosser for leie (sal.leie er en liste):
 //   { type: "perKonsert", belop, naar }                 naar: "konsertmaaned" | "maanedEtter" | "maanedFoer"
@@ -29,7 +30,10 @@ export function kapasitet(sal, oppsett) {
 /** Antall betalte billetter for en konsert i en gitt sal og oppsett. */
 export function billetter(sesong, konsert, sal, oppsett = konsert.oppsett) {
   const faktor = sesong.etterspoerselsfaktor ?? 1;
-  const onsket = (konsert.forventetSalg ?? 0) * faktor;
+  // Lokaleeffekt (arbeidsboka Forutsetninger D52:D54): salget i salen i forhold til etterspørselen.
+  // 100 % er Majas premiss, lokalet påvirker ikke salget. Taket i salen gjelder uansett.
+  const lokal = sal?.lokaleeffekt ?? 1;
+  const onsket = (konsert.forventetSalg ?? 0) * faktor * lokal;
   const kap = kapasitet(sal, oppsett);
   if (kap === null) return { n: 0, onsket, kap: null, kappet: onsket > 0, mulig: false };
   const n = Math.min(onsket, kap);
@@ -164,6 +168,30 @@ export function beregnAlle(sesong, saler, program) {
   const egen = beregnPlan(sesong, saler, program, k => k.salId);
   const blandet = new Set(program.map(k => k.salId)).size > 1;
   return { altI, egen, blandet, avstaa: { nv: 0, netto: 0, behov: 0, holderRammen: true, laan: 0, rentekostnad: 0, nvEtterRente: 0, maanederMedLaan: 0 } };
+}
+
+/* ---------- Scenarioer ----------
+ * Et scenario setter to forutsetninger: etterspørselsfaktoren og pakkeprisen (som arket Forutsetninger
+ * i arbeidsboka). Det finnes ingen egen «aktiv scenario»-tilstand: det aktive scenarioet er det som
+ * stemmer med verdiene akkurat nå. Endres en glider, stemmer ingen, og siden viser «Egne verdier».
+ */
+const lik = (a, b) => Math.abs((a ?? 0) - (b ?? 0)) < 1e-9;
+
+/** Scenarioet som stemmer med sesongens etterspørselsfaktor og pakkepris, eller null. */
+export function aktivtScenario(sesong) {
+  return (sesong.scenarioer ?? []).find(sc => lik(sc.etterspoerselsfaktor, sesong.etterspoerselsfaktor ?? 1) && lik(sc.pakke, sesong.pakke)) ?? null;
+}
+
+/** Setter scenarioets verdier på sesongen (endrer objektet) og returnerer det. */
+export function velgScenario(sesong, scenario) {
+  sesong.etterspoerselsfaktor = scenario.etterspoerselsfaktor;
+  sesong.pakke = scenario.pakke;
+  return sesong;
+}
+
+/** Alle resultatene for hvert scenario: [{ scenario, res }], der res er beregnAlle med scenarioets verdier. */
+export function beregnScenarioer(sesong, saler, program) {
+  return (sesong.scenarioer ?? []).map(scenario => ({ scenario, res: beregnAlle(velgScenario({ ...sesong }, scenario), saler, program) }));
 }
 
 /** Dyp kopi uten funksjoner, til lagring og «tilbake til casen». */

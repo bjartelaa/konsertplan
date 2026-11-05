@@ -442,3 +442,44 @@ body:not(.forklar) .forutsetninger .rad { grid-template-columns: minmax(220px, 1
   .figur-rad { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Scenarioer: fem knapper, ett aktivt om gangen, pluss «Egne verdier» når gliderne er flyttet */
+.scenarioer { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.scenario {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 12px 14px 11px;
+  border: 1.5px solid var(--strek);
+  border-radius: 4px;
+  background: var(--papir);
+  line-height: 1.25;
+}
+.scenario:hover { border-color: var(--blekk); background: #fff; }
+.scenario[aria-pressed="true"] { border-color: var(--blekk); box-shadow: inset 0 0 0 1.5px var(--blekk); }
+.scenario .scenario-navn { font-weight: 700; font-stretch: 92%; font-size: 16px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.scenario .scenario-verdier { font-size: 13.5px; color: var(--blekk-svak); }
+.scenario.oppside { border-style: dashed; }
+.scenario.oppside .scenario-navn { color: var(--blekk-svak); }
+.scenario.egne { border-style: dashed; border-color: var(--strek); background: transparent; cursor: default; color: var(--blekk-svak); }
+.scenario.egne.aktiv { border-style: solid; border-color: var(--blekk); box-shadow: inset 0 0 0 1.5px var(--blekk); color: var(--blekk); }
+.scenario-begrunnelse { margin-top: 12px; max-width: 80ch; color: var(--blekk-svak); font-size: 15px; }
+
+/* Konsekvenstabellen: handling per rad, scenario per kolonne */
+.konsekvens th, .konsekvens td { padding: 12px 14px; vertical-align: top; }
+.konsekvens th { font-size: 14px; color: var(--blekk); }
+.konsekvens th .liten { font-weight: 400; margin-top: 2px; }
+.konsekvens td.handling { font-weight: 600; white-space: nowrap; }
+.konsekvens td.handling .prikk { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c, var(--graa)); margin-right: 10px; vertical-align: middle; }
+.konsekvens td.handling .merke { margin-left: 8px; }
+.konsekvens .nv-celle { font-size: 19px; font-weight: 700; font-stretch: 88%; letter-spacing: -.01em; }
+.konsekvens th.aktiv, .konsekvens td.aktiv { background: rgba(29, 36, 51, .045); }
+.konsekvens th.oppside, .konsekvens td.oppside { opacity: .6; }
+.konsekvens th.aktiv.oppside, .konsekvens td.aktiv.oppside { opacity: 1; }
+.konsekvens tfoot td { font-size: 13.5px; font-weight: 600; color: var(--pluss); }
+.konsekvens tfoot td.minus { color: var(--minus); }
+.konsekvens tfoot td:first-child { color: var(--blekk-svak); }
+
+/* Lokaleeffekt-feltet på salkortet */
+.prosentfelt { display: flex; align-items: baseline; gap: 6px; }
+.prosentfelt input { width: 8ch; }

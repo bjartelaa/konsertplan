@@ -114,3 +114,71 @@ test("lån ut over rammen: B i basis trenger 66 100 kr i tre måneder, rente 12 
   assert.equal(r0(samlet.B.laan), 164120);
   assert.equal(samlet.B.maanederMedLaan, 5);
 });
+
+test("scenarioene i arbeidsboka: alle fem treffer forstaelse.md kap. 9 på kronen, nåverdi og behov", async () => {
+  const { SCENARIOER_2027 } = await import("../src/standard-2027.js");
+  const fasit = {
+    "Basis":             [[51324, 201394, 173787], [231900, 316100, 216696]],
+    "Lav etterspørsel":  [[-31964, -8529, 2157],   [253200, 372120, 240361]],
+    "Høyere pakkepris":  [[-19974, 130095, 102488], [261900, 358100, 246696]],
+    "Samlet":            [[-103263, -79828, -69141], [318080, 414120, 282361]],
+    "Høy etterspørsel":  [[102783, 372350, 313035], [210320, 288960, 200035]],
+  };
+  assert.deepEqual(SCENARIOER_2027.map(s => s.navn), Object.keys(fasit));
+  for (const sc of SCENARIOER_2027) {
+    const { altI } = alle({ etterspoerselsfaktor: sc.etterspoerselsfaktor, pakke: sc.pakke });
+    assert.deepEqual([altI.A.nv, altI.B.nv, altI.C.nv].map(r0), fasit[sc.navn][0], `nåverdi ${sc.navn}`);
+    assert.deepEqual([altI.A.behov, altI.B.behov, altI.C.behov].map(r0), fasit[sc.navn][1], `behov ${sc.navn}`);
+  }
+  assert.equal(SCENARIOER_2027.filter(s => s.oppside).map(s => s.navn).join(), "Høy etterspørsel");
+});
+
+test("aktivt scenario følger verdiene: Basis i casen, Samlet etter velgScenario, ingen etter en glider", async () => {
+  const { aktivtScenario, velgScenario, beregnScenarioer } = await import("../src/motor.js");
+  const d = standardSesong();
+  assert.equal(aktivtScenario(d.sesong)?.navn, "Basis");
+  velgScenario(d.sesong, d.sesong.scenarioer.find(s => s.navn === "Samlet"));
+  assert.equal(d.sesong.etterspoerselsfaktor, 0.8);
+  assert.equal(d.sesong.pakke, 66000);
+  assert.equal(aktivtScenario(d.sesong)?.navn, "Samlet");
+  d.sesong.pakke = 66500;
+  assert.equal(aktivtScenario(d.sesong), null);
+  // beregnScenarioer regner alle fem uten å endre sesongen
+  const alleSc = beregnScenarioer(d.sesong, d.saler, d.program);
+  assert.equal(alleSc.length, 5);
+  assert.equal(d.sesong.pakke, 66500);
+  assert.equal(r0(alleSc[0].res.altI.C.nv), 173787);
+  assert.equal(r0(alleSc[3].res.altI.C.behov), 282361);
+});
+
+test("lokaleeffekt per sal: Usikkerhet del 6 og Resultater del 5 i arbeidsboka (29.10.2026)", () => {
+  const med = lokal => {
+    const d = standardSesong();
+    for (const s of d.saler) if (lokal[s.id] != null) s.lokaleeffekt = lokal[s.id];
+    return beregnAlle(d.sesong, d.saler, d.program).altI;
+  };
+  // B og C 70 % (datatabell B232): NV −118 376 og −88 802, behov 399 980 og 266 617. A uendret
+  let r = med({ B: 0.7, C: 0.7 });
+  assert.deepEqual([r.A.nv, r.B.nv, r.C.nv].map(r0), [51324, -118376, -88802]);
+  assert.deepEqual([r.A.behov, r.B.behov, r.C.behov].map(r0), [231900, 399980, 266617]);
+  // B og C 50 % (B212)
+  r = med({ B: 0.5, C: 0.5 });
+  assert.deepEqual([r.B.nv, r.C.nv].map(r0), [-338070, -274560]);
+  assert.deepEqual([r.B.behov, r.C.behov].map(r0), [487300, 385446]);
+  // A 110 % (B298): flere konserter treffer taket på 250
+  r = med({ A: 1.1 });
+  assert.equal(r0(r.A.nv), 80644);
+  assert.equal(r0(r.A.behov), 221210);
+  assert.equal(r0(r.C.nv), 173787);
+  // A med fullt hus hver kveld når aldri C (Resultater F44: 155 704 mot 173 787)
+  r = med({ A: 2 });
+  assert.equal(r0(r.A.nv), 155704);
+  assert.ok(r.A.perKonsert.every(k => k.n === 250));
+  assert.ok(r.A.nv < r.C.nv);
+  // Grensen (Resultater C42 og F42): C kan selge ned til 85,44 % av etterspørselen før nåverdien er lik A,
+  // og behovet for C er da 229 001 kr. Arbeidsboka interpolerer i en datatabell, her finnes punktet med halveringssøk
+  let lav = 0.5, hoy = 1;
+  for (let i = 0; i < 40; i++) { const m = (lav + hoy) / 2; if (med({ C: m }).C.nv < 51324.4579) lav = m; else hoy = m; }
+  assert.equal(Math.round(hoy * 10000) / 10000, 0.8544);
+  assert.equal(r0(med({ C: hoy }).C.behov), 229001);
+});

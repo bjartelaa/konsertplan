@@ -17,15 +17,32 @@ export const SESONG_2027 = {
   ramme: 250000,             // startfinansiering Maja tror hun kan skaffe
   etterspoerselsfaktor: 1,   // 1 = Majas premiss: samme salg som 2026
   laanRente: 0.12,           // årlig rente på lån ut over rammen (kassekreditt). Gruppas antakelse, ikke fra casen
+  scenarioer: [],            // fylles med SCENARIOER_2027 under
   maanedsnavn: ["Før januar", "Januar", "Februar", "Mars", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Desember"],
 };
+
+// Scenarioene fra arbeidsboka (Forutsetninger B13:F17). Hvert scenario setter etterspørselsfaktoren og
+// pakkeprisen. Nivåene og begrunnelsene er gruppas, teksten er den samme som i arbeidsboka.
+export const SCENARIOER_2027 = [
+  { navn: "Basis", etterspoerselsfaktor: 1, pakke: 60000,
+    begrunnelse: "Majas premiss: samme salg som tilsvarende konsert i 2026. Rigg & Ro-tilbudet på 60 000 kr." },
+  { navn: "Lav etterspørsel", etterspoerselsfaktor: 0.8, pakke: 60000,
+    begrunnelse: "Student- og tidligrabatten forsvinner. 1 203 av 3 380 betalte billetter i 2026 (36 %) var rabatterte og blir 9 til 17 % dyrere. Nivået er gruppas antakelse." },
+  { navn: "Høyere pakkepris", etterspoerselsfaktor: 1, pakke: 66000,
+    begrunnelse: "Rigg & Ro kan revidere tilbudet før signering. 10 % høyere pris er gruppas antakelse." },
+  { navn: "Samlet", etterspoerselsfaktor: 0.8, pakke: 66000,
+    begrunnelse: "Lav etterspørsel og høyere pakkepris samtidig (oppgavens samlede scenario). Høy etterspørsel er ikke med." },
+  { navn: "Høy etterspørsel", etterspoerselsfaktor: 1.2, pakke: 60000, oppside: true,
+    begrunnelse: "Oppside: 20 % flere betalte billetter enn i 2026. Gruppas antakelse, inngår ikke i beslutningsreglene." },
+];
+SESONG_2027.scenarioer = SCENARIOER_2027;
 
 export const SALER_2027 = [
   {
     id: "A", navn: "Lune Sal", kort: "A", farge: "blaa",
     beskrivelse: "Liten kultursal i et tidligere snekkerverksted. Lav scene, intimt.",
     kilde: "https://alu042.github.io/met3-lune-sal/", bilde: "img/lune-sal.webp",
-    kapasitet: { staa: null, sitte: 250 }, sitteAntatt: false,
+    kapasitet: { staa: null, sitte: 250 }, sitteAntatt: false, lokaleeffekt: 1,
     kapasitetNotat: "Tilbudet: 250 salgbare plasser. Nettsiden sier 270 seter. Regnes som sittende sal uten ståoppsett (antatt).",
     kunHelSesong: false,
     leie: [{ type: "perKonsert", belop: 9000, naar: "konsertmaaned" }],
@@ -34,7 +51,7 @@ export const SALER_2027 = [
     id: "B", navn: "Søyleverket", kort: "B", farge: "gul",
     beskrivelse: "Kulturrom med flatt gulv, fast scene og løse stoler. Fast sesongleie.",
     kilde: "https://alu042.github.io/met3-soyleverket/", bilde: "img/soyleverket.webp",
-    kapasitet: { staa: 450, sitte: 250 }, sitteAntatt: true,
+    kapasitet: { staa: 450, sitte: 250 }, sitteAntatt: true, lokaleeffekt: 1,
     kapasitetNotat: "Tilbudet: 450 salgbare plasser. Nettsiden sier inntil 500 personer. Sitteplasser 250 er antatt (løse stoler på flatt gulv).",
     kunHelSesong: true,
     leie: [
@@ -46,7 +63,7 @@ export const SALER_2027 = [
     id: "C", navn: "Skarvkaien", kort: "C", farge: "rosa",
     beskrivelse: "Havnelager med fast scene og åpent gulv. Leien følger billettoppgjøret.",
     kilde: "https://alu042.github.io/met3-skarvkaien/", bilde: "img/skarvkaien.webp",
-    kapasitet: { staa: 450, sitte: 200 }, sitteAntatt: true,
+    kapasitet: { staa: 450, sitte: 200 }, sitteAntatt: true, lokaleeffekt: 1,
     kapasitetNotat: "Tilbudet: 450 salgbare plasser. Nettsiden sier inntil 490 stående. Sitteplasser 200 er antatt (kan rigges sittende).",
     kunHelSesong: false,
     leie: [{ type: "andel", andel: 0.18, minimum: 7500, naar: "maanedEtter" }],

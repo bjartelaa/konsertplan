@@ -1,7 +1,7 @@
 // Konsertplan: tilstand og rendering. Alt regnes på nytt ved hver endring.
-import { beregnAlle, kapasitet, kopi } from "./motor.js";
+import { beregnAlle, beregnScenarioer, aktivtScenario, velgScenario, kapasitet, kopi } from "./motor.js";
 import { forslagForKonsert, besteBlanding } from "./forslag.js";
-import { SESONG_2027, SALER_2027, SJANGRE, LOKALER_2026, standardSesong } from "./standard-2027.js";
+import { SESONG_2027, SALER_2027, SCENARIOER_2027, SJANGRE, LOKALER_2026, standardSesong } from "./standard-2027.js";
 import { lesLokalt, lagreLokalt, slettLokalt, lastNedFil, lesFil } from "./lagring.js";
 import { tegnSaldo, tegnBidrag } from "./figurer.js";
 
@@ -97,8 +97,9 @@ function visForklaringer() {
 function reparer() {
   const d = state.data;
   d.sesong = { ...kopi(SESONG_2027), ...d.sesong };
+  if (!Array.isArray(d.sesong.scenarioer) || !d.sesong.scenarioer.length) d.sesong.scenarioer = kopi(SCENARIOER_2027);
   if (!d.saler.length) d.saler = kopi(SALER_2027);
-  for (const s of d.saler) { s.leie ??= []; s.kapasitet ??= { staa: null, sitte: null }; s.farge ??= "graa"; }
+  for (const s of d.saler) { s.leie ??= []; s.kapasitet ??= { staa: null, sitte: null }; s.farge ??= "graa"; s.lokaleeffekt ??= 1; }
   const perKonsert = salerPerKonsert();
   const standardProgram = standardSesong().program;
   for (const k of d.program) {
@@ -123,7 +124,8 @@ function beregn() { const d = state.data; return beregnAlle(d.sesong, d.saler, d
 function render() {
   const d = state.data;
   document.getElementById("sesongnavn").value = d.sesong.navn;
-  document.getElementById("undertekst").textContent = `${d.program.length} konserter, ${d.saler.length} saler, ramme ${kr(d.sesong.ramme)}`;
+  const sc = aktivtScenario(d.sesong);
+  document.getElementById("undertekst").textContent = `${d.program.length} konserter, ${d.saler.length} saler, ramme ${kr(d.sesong.ramme)}. Scenario: ${sc ? sc.navn : "egne verdier"}`;
   for (const b of document.querySelectorAll(".faner button")) b.setAttribute("aria-pressed", String(b.dataset.fane === state.fane));
   document.body.classList.toggle("fane-resultater", state.fane === "resultater");
   const res = beregn();
@@ -278,8 +280,27 @@ function renderResultater(main, res) {
     lagre();
     if (venter) return;
     venter = true;
-    requestAnimationFrame(() => { venter = false; const r = beregn(); renderStripe(r); innhold.replaceChildren(); fyllResultater(innhold, r); });
+    requestAnimationFrame(() => { venter = false; const r = beregn(); renderStripe(r); tegnScenarioer(); innhold.replaceChildren(); fyllResultater(innhold, r); });
   };
+  // Scenariovelgeren tegnes på nytt når gliderne flyttes, så den viser «Egne verdier» når ingen stemmer
+  const scenarioBoks = h("div", { class: "scenarioer" });
+  const begrunnelse = h("p", { class: "scenario-begrunnelse" });
+  const tegnScenarioer = () => {
+    const aktiv = aktivtScenario(s);
+    scenarioBoks.replaceChildren(...s.scenarioer.map(sc => h("button", { type: "button", class: `scenario${sc.oppside ? " oppside" : ""}`, "aria-pressed": String(sc === aktiv),
+      onclick: () => { velgScenario(s, sc); render(); } },
+      h("span", { class: "scenario-navn" }, sc.navn, sc.oppside ? h("span", { class: "merke" }, "oppside") : null),
+      h("span", { class: "scenario-verdier tall" }, `${pst(sc.etterspoerselsfaktor)} salg, ${kr(sc.pakke)}`))),
+      h("div", { class: `scenario egne${aktiv ? "" : " aktiv"}` },
+        h("span", { class: "scenario-navn" }, "Egne verdier"),
+        h("span", { class: "scenario-verdier tall" }, aktiv ? "flytt en glider" : `${pst(s.etterspoerselsfaktor)} salg, ${kr(s.pakke)}`)));
+    begrunnelse.textContent = aktiv ? aktiv.begrunnelse : "Verdiene fra gliderne. Ingen av scenarioene i arbeidsboka stemmer akkurat med dem.";
+  };
+  tegnScenarioer();
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, "Scenario"),
+    fork("p", "ingress", "Ett scenario om gangen, som i arbeidsboka. Scenarioet setter etterspørselen i forhold til 2026 og pakkeprisen per konsert. Alt på siden regnes på nytt. Nivåene er gruppas antakelser, ikke sannsynligheter, og Høy etterspørsel er en oppside som ikke inngår i beslutningsreglene."),
+    scenarioBoks, begrunnelse));
   const glider = (navn, felt, min, max, steg, vis, basis) => {
     const inp = h("input", { type: "range", min, max, step: steg, value: s[felt], "aria-label": navn });
     const verdi = h("b", { class: "tall" });
@@ -293,8 +314,8 @@ function renderResultater(main, res) {
     return h("div", { class: "glider" }, h("label", {}, h("span", {}, navn), verdi), inp, h("div", { class: "ende" }, h("span", {}, vis(min)), h("span", {}, vis(max))));
   };
   main.append(h("section", { class: "seksjon" },
-    h("h2", {}, "Hva om salget eller pakkeprisen blir en annen?"),
-    fork("p", "ingress", "Dra i gliderne. Alt på siden regnes på nytt. Basis er Majas premiss: samme salg som i 2026 og 60 000 kr per konsert."),
+    h("h2", {}, "Finjuster: hva om salget eller pakkeprisen blir noe annet?"),
+    fork("p", "ingress", "Dra i gliderne for verdier mellom scenarioene. Alt på siden regnes på nytt. Basis er Majas premiss: samme salg som i 2026 og 60 000 kr per konsert."),
     h("div", { class: "glidere" },
       glider("Etterspørsel i forhold til 2026", "etterspoerselsfaktor", 0.5, 1.3, 0.01, pst, 1),
       glider("Pakkepris per konsert", "pakke", 48000, 78000, 500, kr, 60000))));
@@ -309,7 +330,10 @@ function fyllResultater(innhold, res) {
 
   innhold.append(h("section", { class: "seksjon" },
     fork("p", "ingress", "Stripa øverst viser nåverdi med 4 % realrente per år, og det største beløpet Sceneskift ligger ute med underveis, målt ved månedsslutt. Avstå gir null i begge. Ligger behovet over rammen, vises lånet som trengs (det saldoen ligger under rammen, som en kassekreditt) og renten på det. Renten holdes utenfor nåverdien, slik casen krever, og vises som egen linje."),
-    res.blandet ? h("p", { class: "varsel" }, `Egen plan bruker ${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(" og ")}. Casen sier at avtalene gjelder hele programmet, så en blanding krever at utleierne godtar enkeltkonserter. Vis det som et alternativ Maja kan ta opp før signering, ikke som et tilbud som finnes.`) : null));
+    res.blandet ? h("p", { class: "varsel" }, `Egen plan bruker ${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(" og ")}. Casen sier at avtalene gjelder hele programmet, så en blanding krever at utleierne godtar enkeltkonserter. Vis det som et alternativ Maja kan ta opp før signering, ikke som et tilbud som finnes.`) : null,
+    lokaleeffektMerknad()));
+
+  innhold.append(konsekvenstabell(res));
 
   const etiketter = res.egen.saldo.map((_, t) => MAANEDER[t] ?? `M${t}`);
   const serier = [
@@ -340,6 +364,47 @@ function fyllResultater(innhold, res) {
       h("thead", {}, h("tr", {}, h("th", {}, "Kroner"), ...etiketter.map(e => h("th", { class: "hoyre" }, e)))),
       h("tbody", {}, rad("Billettoppgjør", L.billetter), rad("Publikumsutgift", L.utgift), rad("Pakke", L.pakke), rad("Leie", L.leie), rad("Sum i måneden", res.egen.cf), rad("Saldo", res.egen.saldo, "saldo"),
         ...(res.egen.laan > 0 ? [rad("Under rammen, lån", res.egen.trekk.map(x => -x)), rad("Rente på lånet", res.egen.renter.map(x => -x))] : []))))));
+}
+
+/** Merknad når en sal har lokaleeffekt ulik 100 %, så det ikke skjer i stillhet. */
+function lokaleeffektMerknad() {
+  const saler = state.data.saler.filter(s => (s.lokaleeffekt ?? 1) !== 1);
+  if (!saler.length) return null;
+  return h("p", { class: "varsel", style: "margin-top: 12px" }, h("span", { class: "merke varsel" }, "følsomhet"), " ",
+    `Lokaleeffekt: ${saler.map(s => `${s.navn} ${pst(s.lokaleeffekt)}`).join(", ")}. Salget i ${saler.length === 1 ? "den salen" : "de salene"} regnes som den andelen av etterspørselen, og taket i salen gjelder fortsatt. Majas premiss er 100 %. Endres under Saler.`);
+}
+
+/** Konsekvenstabellen fra oppgaveteksten: én rad per handling (også å avstå), én kolonne per scenario. Nåverdi og om rammen holder. */
+function konsekvenstabell(res) {
+  const d = state.data;
+  const s = d.sesong;
+  const aktiv = aktivtScenario(s);
+  const alleSc = beregnScenarioer(s, d.saler, d.program);
+  const hodeKlasse = sc => `${sc === aktiv ? "aktiv" : ""}${sc.oppside ? " oppside" : ""}`;
+  const celle = (sc, r) => {
+    const over = s.ramme != null && r.behov > s.ramme;
+    return h("td", { class: `hoyre ${hodeKlasse(sc)}` },
+      h("div", { class: `tall nv-celle ${r.nv < 0 ? "minus" : ""}` }, kr(r.nv)),
+      h("div", { class: `liten tall ${over ? "minus" : "svak"}` }, r.behov ? `trenger ${tall(r.behov)}${over ? ", over rammen" : ""}` : "trenger 0"));
+  };
+  const rader = [
+    ...d.saler.map(x => ({ navn: `Alt i ${salTittel(x)}`, farge: fargeFor(x), hent: r => r.altI[x.id] })),
+    ...(res.blandet ? [{ navn: "Egen plan", farge: "gronn", merke: "utenfor casen", hent: r => r.egen }] : []),
+    { navn: "Avstå", farge: "graa", hent: r => r.avstaa },
+  ];
+  const holder = sc => rader.filter(r => r.navn !== "Avstå" && sc.res && r.hent(sc.res).holderRammen).map(r => r.navn.replace("Alt i ", "").split(":")[0]);
+  return h("section", { class: "seksjon" },
+    h("h2", {}, "Alle scenarioene samlet"),
+    fork("p", "ingress", "Konsekvenstabellen fra oppgaveteksten: én rad per handling, også å avstå, og én kolonne per scenario. Nåverdien står stort, og under hvor mye Sceneskift må ligge ute med. Rødt betyr tap eller over rammen. Den aktive kolonnen er valgt over."),
+    h("div", { class: "tabellramme" }, h("table", { class: "konsekvens" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Handling"), ...alleSc.map(({ scenario: sc }) => h("th", { class: `hoyre ${hodeKlasse(sc)}` }, sc.navn, h("div", { class: "liten svak tall" }, `${pst(sc.etterspoerselsfaktor)} salg, ${kr(sc.pakke)}`))))),
+      h("tbody", {}, ...rader.map(rad => h("tr", { style: `--c: var(--${rad.farge})` },
+        h("td", { class: "handling" }, h("span", { class: "prikk" }), rad.navn, rad.merke ? h("span", { class: "merke varsel" }, rad.merke) : null),
+        ...alleSc.map(({ scenario: sc, res: r }) => celle(sc, rad.hent(r)))))),
+      s.ramme == null ? null : h("tfoot", {}, h("tr", {}, h("td", {}, "Holder rammen"), ...alleSc.map(({ scenario: sc, res: r }) => {
+        const ok = holder({ res: r });
+        return h("td", { class: `hoyre liten ${hodeKlasse(sc)} ${ok.length ? "" : "minus"}` }, ok.length ? ok.join(", ") : "ingen");
+      }))))));
 }
 
 function padTil(arr, n) { const ut = arr.slice(); while (ut.length < n) ut.push(ut[ut.length - 1]); return ut; }
@@ -393,7 +458,13 @@ function salKort(s, res) {
       h("div", { class: "felt-rad" },
         kapFelt("staa", "Stående, plasser"), kapFelt("sitte", "Sittende, plasser"),
         h("label", { class: "avkryss" }, h("input", { type: "checkbox", checked: !!s.sitteAntatt, onchange: e => endre("sitteAntatt", e.target.checked) }), "Sitteplasser er antatt"),
-        h("label", { class: "avkryss" }, h("input", { type: "checkbox", checked: !!s.kunHelSesong, onchange: e => endre("kunHelSesong", e.target.checked) }), "Kun hel sesong")),
+        h("label", { class: "avkryss" }, h("input", { type: "checkbox", checked: !!s.kunHelSesong, onchange: e => endre("kunHelSesong", e.target.checked) }), "Kun hel sesong"),
+        h("label", { class: "felt" },
+          h("span", {}, "Lokaleeffekt på salget", h("span", { class: "merke" }, "følsomhet")),
+          h("div", { class: "prosentfelt" },
+            h("input", { type: "number", min: 0, max: 300, step: 5, value: Math.round((s.lokaleeffekt ?? 1) * 1000) / 10, "aria-label": "Lokaleeffekt i prosent", onchange: e => endre("lokaleeffekt", Math.max(0, Number(e.target.value) || 0) / 100) }),
+            h("span", { class: "svak" }, "%")))),
+      fork("p", "notat", "Lokaleeffekt: salget her i forhold til etterspørselen. 100 % er Majas premiss (lokalet påvirker ikke salget), 85 % betyr 15 % færre kjøpere når konserten er her. Taket i salen gjelder uansett. Gruppas egen følsomhet, som i arbeidsboka."),
       fork("label", "felt bred", h("span", {}, "Beskrivelse og kapasitetsnotat"),
         h("input", { type: "text", value: s.kapasitetNotat ?? s.beskrivelse ?? "", onchange: e => endre("kapasitetNotat", e.target.value) })),
       h("div", { class: "byggeklosser" },

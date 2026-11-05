@@ -20,6 +20,14 @@ B har fast sesongleie og kan bare velges som hel sesong («Alt i B»). Blanding 
 
 Sitteplasser er ikke oppgitt i tilbudene. B 250 og C 200 er antatt og merket slik. A regnes som sittende sal med 250 plasser (nettsiden sier 270 seter).
 
+## Scenarioer og lokaleeffekt
+
+Resultater starter med scenariovelgeren fra arbeidsboka: Basis (100 % av 2026-salget, 60 000 kr per konsert), Lav etterspørsel (80 %), Høyere pakkepris (66 000 kr), Samlet (80 % og 66 000 kr) og Høy etterspørsel (120 %, en oppside som ikke inngår i beslutningsreglene). Et scenario setter etterspørselsfaktoren og pakkeprisen, med begrunnelsen fra arbeidsboka under. Det finnes ingen egen «aktivt scenario»-tilstand: det aktive scenarioet er det som stemmer med verdiene akkurat nå (`aktivtScenario` i `src/motor.js`). Flyttes en glider, viser siden «Egne verdier». Scenarioene ligger i `sesong.scenarioer` og lagres med sesongen.
+
+Konsekvenstabellen under gliderne viser nåverdi og finansieringsbehov for hver handling (alt i hver sal, egen plan når den blander, og avstå) i alle scenarioene samtidig, og hvilke som holder rammen. Testene krever at alle fem scenarioene treffer arbeidsboka på kronen.
+
+Lokaleeffekt per sal (`sal.lokaleeffekt`, standard 100 %) står på salkortet under Saler og tilsvarer Forutsetninger D52:D54 i arbeidsboka: salget i salen i forhold til etterspørselen, med taket i salen som før. Det er gruppas egen følsomhet, ikke casens premiss, og Resultater viser en merknad så lenge en sal har noe annet enn 100 %. Testet mot datatabellen i arbeidsboka (B og C 70 % og 50 %, A 110 %, A med fullt hus 155 704 kr) og grensen der C blir like god som A (85,44 %, behov 229 001 kr).
+
 ## Reglene
 
 Fra oppgaveteksten og arbeidsboka `Sceneskift_AK2_modell.xlsx`. Per konsert i måned m med N betalte billetter: oppgjør N × (350 − 10) i måned m + 1, publikumsutgift N × 10 i måned m, pakke 30 000 måneden før og 30 000 i konsertmåneden. Leie etter salens byggeklosser: fast beløp per konsert, andel av oppgjøret med minimum, engangsbeløp, eller sesongleie med betalingsplan. Nåverdi med (1,04)^(t/12). Finansieringsbehov er laveste saldo ved månedsslutt.
@@ -31,9 +39,9 @@ Kontrolltallene (basis): nåverdi A 51 324, B 201 394, C 173 787 kr, behov A 231
 ## Filer
 
 - `index.html`, `css/konsertplan.css`: siden
-- `src/motor.js`: regnemotoren, uten DOM
+- `src/motor.js`: regnemotoren, uten DOM. Også scenarioene (`aktivtScenario`, `velgScenario`, `beregnScenarioer`)
 - `src/forslag.js`: sjangerregelen (sjanger gir oppsett, forventet salg gir sal)
-- `src/standard-2027.js`: Sceneskift 2027 som standardsesong
+- `src/standard-2027.js`: Sceneskift 2027 som standardsesong, med de fem scenarioene fra arbeidsboka
 - `src/lagring.js`, `src/figurer.js`, `src/app.js`: lagring, SVG-figurer, grensesnitt
 - `konsertplan.js`: alle modulene slått sammen til én fil, så siden virker rett fra fil. Generert, ikke rediger
 - `img/`: salbildene er hentet fra case-nettsidene (alu042.github.io/met3-lune-sal, met3-soyleverket, met3-skarvkaien). `publikum.jpg` er Bjartes eget
