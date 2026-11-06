@@ -255,7 +255,7 @@ body.fane-resultater .stripe-del.liten .nv { font-size: 22px; }
 
 /* Innhold */
 main { padding: 34px var(--gutter) 56px; }
-.seksjon + .seksjon, #res-innhold > .seksjon { margin-top: 48px; }
+.seksjon + .seksjon, #res-innhold > .seksjon, #res-raad + .seksjon { margin-top: 48px; }
 .seksjon h2 { font-size: 24px; font-weight: 700; font-stretch: 90%; letter-spacing: -.01em; margin-bottom: 6px; }
 .seksjon > .ingress { max-width: 72ch; color: var(--blekk-svak); margin-bottom: 16px; }
 .verktoylinje { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 14px 0 16px; }
@@ -483,3 +483,40 @@ body:not(.forklar) .forutsetninger .rad { grid-template-columns: minmax(220px, 1
 /* Lokaleeffekt-feltet på salkortet */
 .prosentfelt { display: flex; align-items: baseline; gap: 6px; }
 .prosentfelt input { width: 8ch; }
+
+/* Hva snur rådet: tre regler med valget som brikke, og grensene som tabell med store tall */
+.raad .regler { display: grid; gap: 0; background: var(--papir); box-shadow: 0 1px 3px rgba(0,0,0,.08); border-radius: 4px; }
+.regel { display: grid; grid-template-columns: 82px minmax(200px, 1.1fr) minmax(260px, 1.4fr); gap: 10px 20px; align-items: center; padding: 14px 24px; border-bottom: 1px solid var(--strek-svak); }
+.regel:last-child { border-bottom: 0; }
+.regel-nr { font-family: "Marker", cursive; font-size: 15px; color: var(--blekk-svak); transform: rotate(-2deg); white-space: nowrap; }
+.regel-tekst { display: grid; gap: 2px; }
+.regel-tekst b { font-size: 17px; font-weight: 700; font-stretch: 92%; }
+.regel-tekst .svak { font-size: 14px; }
+.regel-valg { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.valg-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 14px 6px 8px;
+  border-radius: 24px;
+  background: var(--c, var(--graa));
+  color: #fff;
+  font-size: 17px; font-weight: 700; font-stretch: 90%;
+  box-shadow: 0 1px 2px rgba(0,0,0,.15);
+}
+.valg-chip .mini { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; box-shadow: 0 0 0 2px rgba(255,255,255,.7); }
+.valg-chip .prikk { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,.8); margin-left: 6px; }
+.valg-chip.avstaa { background: var(--papir); color: var(--blekk); box-shadow: inset 0 0 0 1.5px var(--blekk); }
+.valg-chip.avstaa .prikk { background: var(--blekk); }
+.naa-linje { margin: 14px 0 0; font-size: 14.5px; }
+.naa-linje b { color: var(--blekk); font-weight: 600; }
+.grenser-tittel { font-size: 17px; font-weight: 700; font-stretch: 92%; margin: 22px 0 8px; }
+.grenser th, .grenser td { padding: 12px 16px; vertical-align: top; }
+.grenser th { font-size: 14px; color: var(--blekk); white-space: normal; max-width: 32ch; }
+.grenser th .liten { font-weight: 400; margin-top: 2px; }
+.grenser td.handling { font-weight: 600; white-space: nowrap; vertical-align: middle; }
+.grenser td.handling .prikk { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c, var(--graa)); margin-right: 10px; vertical-align: middle; }
+.grenser td.handling .merke { margin-left: 8px; }
+.grense-stor { font-size: 28px; font-weight: 700; font-stretch: 84%; letter-spacing: -.015em; line-height: 1.1; }
+.grense-stor.svak { font-size: 22px; font-weight: 600; }
+@media (max-width: 760px) {
+  .regel { grid-template-columns: 1fr; gap: 6px; }
+}

@@ -202,6 +202,90 @@ function beregnScenarioer(sesong, saler, program) {
 /** Dyp kopi uten funksjoner, til lagring og «tilbake til casen». */
 const kopi = x => JSON.parse(JSON.stringify(x));
 
+/* ---------- Hva snur rådet: grenser og beslutningsregler ----------
+ * Grensene finnes med halveringssøk i motoren, ikke med datatabell og interpolasjon som i arbeidsboka.
+ * Derfor kan en grense avvike med noen hundredels prosentpoeng fra arbeidsboka der kurven har en knekk
+ * (en konsert treffer taket i salen) inne i et interpolasjonssteg.
+ */
+
+/** Handlingene som sammenlignes: alt i hver sal, egen plan når den blander, og avstå. hent(sesong) regner handlingen med en variant av sesongen. */
+function handlinger(sesong, saler, program) {
+  const ut = saler.map(s => ({ id: s.id, navn: s.navn, kort: s.kort, farge: s.farge, type: "sal",
+                               hent: v => beregnAltI(v, saler, program, s) }));
+  if (new Set(program.map(k => k.salId)).size > 1) ut.push({ id: "egen", navn: "Egen plan", type: "egen", farge: "gronn", hent: v => beregnPlan(v, saler, program, k => k.salId) });
+  ut.push({ id: "avstaa", navn: "Avstå", type: "avstaa", farge: "graa", hent: () => ({ nv: 0, behov: 0, holderRammen: true }) });
+  return ut;
+}
+
+/**
+ * Halveringssøk etter punktet der ok(x) går fra usann (ved lo) til sann (ved hi).
+ * Returnerer { verdi, status }: status "grense" med verdien, "aldri" hvis ok allerede ved lo (grensen finnes ikke
+ * i intervallet), "alltid" hvis ok heller ikke ved hi.
+ */
+function finnGrense(ok, lo, hi, iter = 45) {
+  if (ok(lo)) return { verdi: null, status: "aldri" };
+  if (!ok(hi)) return { verdi: null, status: "alltid" };
+  for (let i = 0; i < iter; i++) { const m = (lo + hi) / 2; if (ok(m)) hi = m; else lo = m; }
+  return { verdi: (lo + hi) / 2, status: "grense" };
+}
+
+const FULLT_HUS = 10; // etterspørselsfaktor så høy at alle salene er fulle på alle konsertene
+
+/**
+ * Grensene for hver handling, med de andre forutsetningene som de er nå:
+ *   nvNegativUnder:   etterspørselsfaktoren der nåverdien blir negativ (lavere salg gir tap)
+ *   overRammenUnder:  etterspørselsfaktoren der finansieringsbehovet går over rammen
+ *   pakkeOverRammen:  pakkeprisen der behovet går over rammen (høyere pakke gir brudd)
+ * status "aldri" betyr at grensen ikke finnes (for eksempel: holder rammen selv uten salg), "alltid" at handlingen
+ * er på feil side uansett (B går over rammen selv med fullt hus). Avstå tas ikke med.
+ */
+function grenser(sesong, saler, program) {
+  const ramme = sesong.ramme;
+  const sumSalg = program.reduce((a, k) => a + (k.forventetSalg ?? 0), 0);
+  return handlinger(sesong, saler, program).filter(hd => hd.type !== "avstaa").map(hd => {
+    const vedSalg = x => hd.hent({ ...sesong, etterspoerselsfaktor: x });
+    const vedPakke = p => hd.hent({ ...sesong, pakke: p });
+    const naa = hd.hent(sesong);
+    const nvNegativUnder = finnGrense(x => vedSalg(x).nv >= 0, 0, FULLT_HUS);
+    const overRammenUnder = ramme == null ? { verdi: null, status: "aldri" } : finnGrense(x => vedSalg(x).behov <= ramme, 0, FULLT_HUS);
+    const pakkeOverRammen = ramme == null ? { verdi: null, status: "aldri" } : finnGrense(p => vedPakke(p).behov > ramme, 0, Math.max(200000, (sesong.pakke ?? 0) * 3));
+    const faktor = sesong.etterspoerselsfaktor ?? 1;
+    // Avstand fra der vi er nå til grensen, i billetter for hele sesongen (som Resultater F85 i arbeidsboka) og i kroner for pakken
+    const billetterTil = g => (g.status === "grense" ? (faktor - g.verdi) * sumSalg : null);
+    return { id: hd.id, navn: hd.navn, kort: hd.kort, farge: hd.farge, type: hd.type, nv: naa.nv, behov: naa.behov, holderRammen: naa.holderRammen,
+             nvNegativUnder: { ...nvNegativUnder, billetter: billetterTil(nvNegativUnder) },
+             overRammenUnder: { ...overRammenUnder, billetter: billetterTil(overRammenUnder) },
+             pakkeOverRammen: { ...pakkeOverRammen, kroner: pakkeOverRammen.status === "grense" ? pakkeOverRammen.verdi - (sesong.pakke ?? 0) : null } };
+  });
+}
+
+/**
+ * De tre beslutningsreglene fra arbeidsboka. Alle rangerer etter nåverdien med verdiene som gjelder nå:
+ *   1 Robust: høyest nåverdi blant handlingene som holder rammen nå og i alle scenarioene (oppsider holdes utenfor)
+ *   2 Verdi: høyest nåverdi blant handlingene som holder rammen nå
+ *   3 Uten ramme: høyest nåverdi uansett
+ * Avstå (nåverdi 0, holder alltid rammen) er alltid med, så regelen velger avstå når resten gir tap.
+ * Returnerer [{ nr, navn, krav, valg: { id, navn, nv }, kandidater: [id] }].
+ */
+function beslutningsregler(sesong, saler, program) {
+  const hd = handlinger(sesong, saler, program);
+  const scenarioer = (sesong.scenarioer ?? []).filter(sc => !sc.oppside);
+  const holder = r => r.holderRammen !== false;
+  const naa = hd.map(x => ({ ...x, r: x.hent(sesong),
+                             iAlle: scenarioer.every(sc => holder(x.hent(velgScenario({ ...sesong }, sc)))) }));
+  const beste = liste => liste.reduce((a, b) => (b.r.nv > a.r.nv ? b : a));
+  const regel = (nr, navn, krav, filter) => {
+    const kandidater = naa.filter(filter);
+    const v = beste(kandidater);
+    return { nr, navn, krav, valg: { id: v.id, navn: v.navn, kort: v.kort, farge: v.farge, type: v.type, nv: v.r.nv, behov: v.r.behov }, kandidater: kandidater.map(x => x.id) };
+  };
+  return [
+    regel(1, "Robust", `Holder rammen nå og i ${scenarioer.length ? `alle ${scenarioer.length} scenarioene` : "alle scenarioene"}`, x => holder(x.r) && x.iAlle),
+    regel(2, "Verdi", "Holder rammen med verdiene nå", x => holder(x.r)),
+    regel(3, "Uten ramme", "Høyest nåverdi uansett finansiering", () => true),
+  ];
+}
+
 
 // ---- src/forslag.js ----
 // Sjangerregel: sjanger gir forslag til oppsett (sitte eller stå), forventet salg gir forslag
@@ -835,12 +919,14 @@ function renderResultater(main, res) {
 
   // Gliderne bygges én gang og tegnes ikke på nytt mens du drar. Resten av fanen tegnes på nytt, throttlet.
   const innhold = h("div", { id: "res-innhold" });
+  // «Hva snur rådet» ligger øverst og tegnes på nytt sammen med resten
+  const raadBoks = h("div", { id: "res-raad" });
   let venter = false;
   const oppdaterInnhold = () => {
     lagre();
     if (venter) return;
     venter = true;
-    requestAnimationFrame(() => { venter = false; const r = beregn(); renderStripe(r); tegnScenarioer(); innhold.replaceChildren(); fyllResultater(innhold, r); });
+    requestAnimationFrame(() => { venter = false; const r = beregn(); renderStripe(r); tegnScenarioer(); raadBoks.replaceChildren(); fyllRaad(raadBoks); innhold.replaceChildren(); fyllResultater(innhold, r); });
   };
   // Scenariovelgeren tegnes på nytt når gliderne flyttes, så den viser «Egne verdier» når ingen stemmer
   const scenarioBoks = h("div", { class: "scenarioer" });
@@ -857,6 +943,8 @@ function renderResultater(main, res) {
     begrunnelse.textContent = aktiv ? aktiv.begrunnelse : "Verdiene fra gliderne. Ingen av scenarioene i arbeidsboka stemmer akkurat med dem.";
   };
   tegnScenarioer();
+  main.append(raadBoks);
+  fyllRaad(raadBoks);
   main.append(h("section", { class: "seksjon" },
     h("h2", {}, "Scenario"),
     fork("p", "ingress", "Ett scenario om gangen, som i arbeidsboka. Scenarioet setter etterspørselen i forhold til 2026 og pakkeprisen per konsert. Alt på siden regnes på nytt. Nivåene er gruppas antakelser, ikke sannsynligheter, og Høy etterspørsel er en oppside som ikke inngår i beslutningsreglene."),
@@ -881,6 +969,59 @@ function renderResultater(main, res) {
       glider("Pakkepris per konsert", "pakke", 48000, 78000, 500, kr, 60000))));
   main.append(innhold);
   fyllResultater(innhold, res);
+}
+
+/** Øverst i Resultater: de tre beslutningsreglene og grensene der rådet snur. Få og store tall. */
+function fyllRaad(boks) {
+  const d = state.data;
+  const s = d.sesong;
+  const sc = aktivtScenario(s);
+  const regler = beslutningsregler(s, d.saler, d.program);
+  const gr = grenser(s, d.saler, d.program);
+  const pstEn = v => (Math.round(v * 1000) / 10).toLocaleString("nb-NO", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " %";
+  const handlingNavn = v => (v.type === "sal" ? (v.kort ? `${v.kort}: ${v.navn}` : v.navn) : v.navn);
+  const chip = v => [h("span", { class: `valg-chip${v.type === "avstaa" ? " avstaa" : ""}`, style: `--c: var(--${v.farge ?? "graa"})` }, v.type === "sal" ? mini(salAv(v.id)) : h("span", { class: "prikk" }), handlingNavn(v)), v.type === "egen" ? h("span", { class: "merke varsel" }, "utenfor casen") : null];
+  const regelRad = r => {
+    const over = s.ramme != null && r.valg.behov > s.ramme;
+    return h("div", { class: "regel" },
+      h("div", { class: "regel-nr" }, `Regel ${r.nr}`),
+      h("div", { class: "regel-tekst" }, h("b", {}, r.navn), h("span", { class: "svak" }, r.krav)),
+      h("div", { class: "regel-valg" }, chip(r.valg),
+        h("span", { class: "liten svak tall" }, r.valg.type === "avstaa" ? "ingen av salene tåler alle scenarioene" : `nåverdi ${kr(r.valg.nv)}, trenger ${kr(r.valg.behov)}${over ? ", over rammen" : ""}`)));
+  };
+  const naaTekst = `${pst(s.etterspoerselsfaktor ?? 1)} salg og ${kr(s.pakke)} per konsert${sc ? ` (${sc.navn})` : " (egne verdier)"}`;
+
+  // Grensene som tabell: én rad per handling, tre grenser med stort tall og avstanden fra der vi er nå
+  const celle = (g, slag) => {
+    if (g.status !== "grense") {
+      const tekst = { aldri: slag === "nv" ? "blir aldri negativ" : "holder rammen uansett", alltid: slag === "nv" ? "negativ selv med fullt hus" : slag === "pakke" ? "over rammen selv uten pakke" : "over rammen selv med fullt hus" }[g.status];
+      return h("td", { class: "hoyre" }, h("div", { class: `grense-stor ${g.status === "alltid" ? "minus" : "svak"}` }, g.status === "alltid" ? "alltid" : "aldri"), h("div", { class: "liten svak" }, tekst));
+    }
+    const avstand = slag === "pakke" ? g.kroner : g.billetter;
+    const under = avstand < 0;
+    const enhet = slag === "pakke" ? "kr" : Math.abs(Math.round(avstand)) === 1 ? "billett" : "billetter";
+    const margin = under ? `${tall(-avstand)} ${enhet} over grensen nå` : `${tall(avstand)} ${enhet} å gå på`;
+    return h("td", { class: "hoyre" },
+      h("div", { class: `grense-stor tall ${under ? "minus" : ""}` }, slag === "pakke" ? kr(g.verdi) : pstEn(g.verdi)),
+      h("div", { class: `liten tall ${under ? "minus" : "svak"}` }, margin));
+  };
+  const tabell = h("div", { class: "tabellramme" }, h("table", { class: "grenser" },
+    h("thead", {}, h("tr", {},
+      h("th", {}, "Handling"),
+      h("th", { class: "hoyre" }, "Nåverdien blir negativ når salget er under", h("div", { class: "liten svak tall" }, `med pakke ${kr(s.pakke)}`)),
+      h("th", { class: "hoyre" }, "Behovet går over rammen når salget er under", h("div", { class: "liten svak tall" }, `med pakke ${kr(s.pakke)}`)),
+      h("th", { class: "hoyre" }, "Behovet går over rammen når pakken er over", h("div", { class: "liten svak tall" }, `ved ${pst(s.etterspoerselsfaktor ?? 1)} salg`)))),
+    h("tbody", {}, ...gr.map(g => h("tr", { style: `--c: var(--${g.farge ?? "graa"})` },
+      h("td", { class: "handling" }, h("span", { class: "prikk" }), handlingNavn(g), g.type === "egen" ? h("span", { class: "merke varsel" }, "utenfor casen") : null),
+      celle(g.nvNegativUnder, "nv"), celle(g.overRammenUnder, "behov"), celle(g.pakkeOverRammen, "pakke"))))));
+
+  boks.append(h("section", { class: "seksjon raad" },
+    h("h2", {}, "Hva snur rådet"),
+    fork("p", "ingress", "Beslutningsreglene fra arbeidsboka og grensene der svaret snur. Regel 1 krever at rammen holder i alle scenarioene, regel 2 bare med verdiene som gjelder nå, og regel 3 ser bort fra rammen. Alle rangerer etter nåverdien nå. Avstå gir null og holder alltid rammen, så reglene velger avstå når resten gir tap. Grensene finnes med søk i motoren, med de andre forutsetningene som de er nå. Salget måles som andel av salget i 2026, og avstanden i billetter gjelder hele sesongen."),
+    h("div", { class: "regler" }, ...regler.map(regelRad)),
+    h("p", { class: "naa-linje svak" }, "Nå: ", h("b", { class: "tall" }, naaTekst), s.ramme != null ? [". Rammen er ", h("b", { class: "tall" }, kr(s.ramme))] : ". Ingen ramme satt", "."),
+    h("h3", { class: "grenser-tittel" }, "Grensene"),
+    tabell));
 }
 
 function fyllResultater(innhold, res) {

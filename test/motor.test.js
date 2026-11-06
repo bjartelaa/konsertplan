@@ -182,3 +182,56 @@ test("lokaleeffekt per sal: Usikkerhet del 6 og Resultater del 5 i arbeidsboka (
   assert.equal(Math.round(hoy * 10000) / 10000, 0.8544);
   assert.equal(r0(med({ C: hoy }).C.behov), 229001);
 });
+
+test("grenser: hva snur rådet, mot forstaelse.md kap. 9 og notat_tall.py (halveringssøk, ikke interpolasjon)", async () => {
+  const { grenser, finnGrense } = await import("../src/motor.js");
+  const d = standardSesong();
+  const g = Object.fromEntries(grenser(d.sesong, d.saler, d.program).map(x => [x.id, x]));
+  const p1 = v => Math.round(v * 1000) / 10; // prosent med én desimal
+  // Nåverdien blir negativ under 86,7 % (A), 80,8 % (B), 79,8 % (C). A har en knekk ved 86,2 % (konsert 12 treffer taket),
+  // så arbeidsbokas interpolasjon gir 86,66 og søket 86,64. Begge er 86,6 eller 86,7 avrundet
+  assert.ok(Math.abs(p1(g.A.nvNegativUnder.verdi) - 86.7) < 0.15, `A ${p1(g.A.nvNegativUnder.verdi)}`);
+  assert.equal(p1(g.B.nvNegativUnder.verdi), 80.8);
+  assert.equal(p1(g.C.nvNegativUnder.verdi), 79.8);
+  // Behovet går over rammen under 83,0 % (A) og 75,9 % (C). B holder aldri rammen, selv med fullt hus
+  assert.equal(p1(g.A.overRammenUnder.verdi), 83.0);
+  assert.equal(p1(g.C.overRammenUnder.verdi), 75.9);
+  assert.equal(g.B.overRammenUnder.status, "alltid");
+  assert.equal(g.B.overRammenUnder.verdi, null);
+  // Pakkepris der C slutter å holde rammen: 66 661 kr ved 100 % salg, 61 377 kr ved 80 % (notat_tall.py)
+  assert.equal(r0(g.C.pakkeOverRammen.verdi), 66661);
+  assert.equal(r0(g.C.pakkeOverRammen.kroner), 6661);
+  d.sesong.etterspoerselsfaktor = 0.8;
+  const g80 = Object.fromEntries(grenser(d.sesong, d.saler, d.program).map(x => [x.id, x]));
+  assert.equal(r0(g80.C.pakkeOverRammen.verdi), 61377);
+  // Ved 80 % salg har C om lag 8 billetter å gå på før nåverdien blir negativ (Resultater F85: 8,07)
+  assert.equal(Math.round(g80.C.nvNegativUnder.billetter * 100) / 100, 8.07);
+  assert.ok(g80.A.nvNegativUnder.billetter < 0); // A er allerede under grensen
+  // finnGrense: statusene
+  assert.deepEqual(finnGrense(() => true, 0, 1), { verdi: null, status: "aldri" });
+  assert.deepEqual(finnGrense(() => false, 0, 1), { verdi: null, status: "alltid" });
+  assert.equal(Math.round(finnGrense(x => x >= 0.3, 0, 1).verdi * 1000) / 1000, 0.3);
+});
+
+test("beslutningsreglene: 1 avstå, 2 C, 3 B i basis; ved 80 % salg velger alle tre C eller avstå", async () => {
+  const { beslutningsregler } = await import("../src/motor.js");
+  const d = standardSesong();
+  const r = beslutningsregler(d.sesong, d.saler, d.program);
+  assert.deepEqual(r.map(x => x.valg.id), ["avstaa", "C", "B"]);
+  assert.deepEqual(r[1].kandidater, ["A", "C", "avstaa"]);   // B holder ikke rammen i basis
+  assert.deepEqual(r[0].kandidater, ["avstaa"]);             // ingen sal holder rammen i Samlet
+  assert.equal(r0(r[1].valg.nv), 173787);
+  assert.equal(r0(r[2].valg.nv), 201394);
+  d.sesong.etterspoerselsfaktor = 0.8;
+  assert.deepEqual(beslutningsregler(d.sesong, d.saler, d.program).map(x => x.valg.id), ["avstaa", "C", "C"]);
+  // Uten ramme faller regel 1 og 2 sammen med regel 3
+  d.sesong.etterspoerselsfaktor = 1;
+  d.sesong.ramme = null;
+  assert.deepEqual(beslutningsregler(d.sesong, d.saler, d.program).map(x => x.valg.id), ["B", "B", "B"]);
+  // Egen plan som blander A og C tas med som handling
+  d.sesong.ramme = 250000;
+  for (const k of d.program) if ([2, 3, 7, 8, 11].includes(k.nr)) { k.salId = "A"; k.oppsett = "sitte"; }
+  const med = beslutningsregler(d.sesong, d.saler, d.program);
+  assert.ok(med[1].kandidater.includes("egen"));
+  assert.equal(med[1].valg.id, "egen");
+});

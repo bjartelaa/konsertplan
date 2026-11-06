@@ -1,5 +1,5 @@
 // Konsertplan: tilstand og rendering. Alt regnes på nytt ved hver endring.
-import { beregnAlle, beregnScenarioer, aktivtScenario, velgScenario, kapasitet, kopi } from "./motor.js";
+import { beregnAlle, beregnScenarioer, aktivtScenario, velgScenario, grenser, beslutningsregler, kapasitet, kopi } from "./motor.js";
 import { forslagForKonsert, besteBlanding } from "./forslag.js";
 import { SESONG_2027, SALER_2027, SCENARIOER_2027, SJANGRE, LOKALER_2026, standardSesong } from "./standard-2027.js";
 import { lesLokalt, lagreLokalt, slettLokalt, lastNedFil, lesFil } from "./lagring.js";
@@ -275,12 +275,14 @@ function renderResultater(main, res) {
 
   // Gliderne bygges én gang og tegnes ikke på nytt mens du drar. Resten av fanen tegnes på nytt, throttlet.
   const innhold = h("div", { id: "res-innhold" });
+  // «Hva snur rådet» ligger øverst og tegnes på nytt sammen med resten
+  const raadBoks = h("div", { id: "res-raad" });
   let venter = false;
   const oppdaterInnhold = () => {
     lagre();
     if (venter) return;
     venter = true;
-    requestAnimationFrame(() => { venter = false; const r = beregn(); renderStripe(r); tegnScenarioer(); innhold.replaceChildren(); fyllResultater(innhold, r); });
+    requestAnimationFrame(() => { venter = false; const r = beregn(); renderStripe(r); tegnScenarioer(); raadBoks.replaceChildren(); fyllRaad(raadBoks); innhold.replaceChildren(); fyllResultater(innhold, r); });
   };
   // Scenariovelgeren tegnes på nytt når gliderne flyttes, så den viser «Egne verdier» når ingen stemmer
   const scenarioBoks = h("div", { class: "scenarioer" });
@@ -297,6 +299,8 @@ function renderResultater(main, res) {
     begrunnelse.textContent = aktiv ? aktiv.begrunnelse : "Verdiene fra gliderne. Ingen av scenarioene i arbeidsboka stemmer akkurat med dem.";
   };
   tegnScenarioer();
+  main.append(raadBoks);
+  fyllRaad(raadBoks);
   main.append(h("section", { class: "seksjon" },
     h("h2", {}, "Scenario"),
     fork("p", "ingress", "Ett scenario om gangen, som i arbeidsboka. Scenarioet setter etterspørselen i forhold til 2026 og pakkeprisen per konsert. Alt på siden regnes på nytt. Nivåene er gruppas antakelser, ikke sannsynligheter, og Høy etterspørsel er en oppside som ikke inngår i beslutningsreglene."),
@@ -321,6 +325,59 @@ function renderResultater(main, res) {
       glider("Pakkepris per konsert", "pakke", 48000, 78000, 500, kr, 60000))));
   main.append(innhold);
   fyllResultater(innhold, res);
+}
+
+/** Øverst i Resultater: de tre beslutningsreglene og grensene der rådet snur. Få og store tall. */
+function fyllRaad(boks) {
+  const d = state.data;
+  const s = d.sesong;
+  const sc = aktivtScenario(s);
+  const regler = beslutningsregler(s, d.saler, d.program);
+  const gr = grenser(s, d.saler, d.program);
+  const pstEn = v => (Math.round(v * 1000) / 10).toLocaleString("nb-NO", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " %";
+  const handlingNavn = v => (v.type === "sal" ? (v.kort ? `${v.kort}: ${v.navn}` : v.navn) : v.navn);
+  const chip = v => [h("span", { class: `valg-chip${v.type === "avstaa" ? " avstaa" : ""}`, style: `--c: var(--${v.farge ?? "graa"})` }, v.type === "sal" ? mini(salAv(v.id)) : h("span", { class: "prikk" }), handlingNavn(v)), v.type === "egen" ? h("span", { class: "merke varsel" }, "utenfor casen") : null];
+  const regelRad = r => {
+    const over = s.ramme != null && r.valg.behov > s.ramme;
+    return h("div", { class: "regel" },
+      h("div", { class: "regel-nr" }, `Regel ${r.nr}`),
+      h("div", { class: "regel-tekst" }, h("b", {}, r.navn), h("span", { class: "svak" }, r.krav)),
+      h("div", { class: "regel-valg" }, chip(r.valg),
+        h("span", { class: "liten svak tall" }, r.valg.type === "avstaa" ? "ingen av salene tåler alle scenarioene" : `nåverdi ${kr(r.valg.nv)}, trenger ${kr(r.valg.behov)}${over ? ", over rammen" : ""}`)));
+  };
+  const naaTekst = `${pst(s.etterspoerselsfaktor ?? 1)} salg og ${kr(s.pakke)} per konsert${sc ? ` (${sc.navn})` : " (egne verdier)"}`;
+
+  // Grensene som tabell: én rad per handling, tre grenser med stort tall og avstanden fra der vi er nå
+  const celle = (g, slag) => {
+    if (g.status !== "grense") {
+      const tekst = { aldri: slag === "nv" ? "blir aldri negativ" : "holder rammen uansett", alltid: slag === "nv" ? "negativ selv med fullt hus" : slag === "pakke" ? "over rammen selv uten pakke" : "over rammen selv med fullt hus" }[g.status];
+      return h("td", { class: "hoyre" }, h("div", { class: `grense-stor ${g.status === "alltid" ? "minus" : "svak"}` }, g.status === "alltid" ? "alltid" : "aldri"), h("div", { class: "liten svak" }, tekst));
+    }
+    const avstand = slag === "pakke" ? g.kroner : g.billetter;
+    const under = avstand < 0;
+    const enhet = slag === "pakke" ? "kr" : Math.abs(Math.round(avstand)) === 1 ? "billett" : "billetter";
+    const margin = under ? `${tall(-avstand)} ${enhet} over grensen nå` : `${tall(avstand)} ${enhet} å gå på`;
+    return h("td", { class: "hoyre" },
+      h("div", { class: `grense-stor tall ${under ? "minus" : ""}` }, slag === "pakke" ? kr(g.verdi) : pstEn(g.verdi)),
+      h("div", { class: `liten tall ${under ? "minus" : "svak"}` }, margin));
+  };
+  const tabell = h("div", { class: "tabellramme" }, h("table", { class: "grenser" },
+    h("thead", {}, h("tr", {},
+      h("th", {}, "Handling"),
+      h("th", { class: "hoyre" }, "Nåverdien blir negativ når salget er under", h("div", { class: "liten svak tall" }, `med pakke ${kr(s.pakke)}`)),
+      h("th", { class: "hoyre" }, "Behovet går over rammen når salget er under", h("div", { class: "liten svak tall" }, `med pakke ${kr(s.pakke)}`)),
+      h("th", { class: "hoyre" }, "Behovet går over rammen når pakken er over", h("div", { class: "liten svak tall" }, `ved ${pst(s.etterspoerselsfaktor ?? 1)} salg`)))),
+    h("tbody", {}, ...gr.map(g => h("tr", { style: `--c: var(--${g.farge ?? "graa"})` },
+      h("td", { class: "handling" }, h("span", { class: "prikk" }), handlingNavn(g), g.type === "egen" ? h("span", { class: "merke varsel" }, "utenfor casen") : null),
+      celle(g.nvNegativUnder, "nv"), celle(g.overRammenUnder, "behov"), celle(g.pakkeOverRammen, "pakke"))))));
+
+  boks.append(h("section", { class: "seksjon raad" },
+    h("h2", {}, "Hva snur rådet"),
+    fork("p", "ingress", "Beslutningsreglene fra arbeidsboka og grensene der svaret snur. Regel 1 krever at rammen holder i alle scenarioene, regel 2 bare med verdiene som gjelder nå, og regel 3 ser bort fra rammen. Alle rangerer etter nåverdien nå. Avstå gir null og holder alltid rammen, så reglene velger avstå når resten gir tap. Grensene finnes med søk i motoren, med de andre forutsetningene som de er nå. Salget måles som andel av salget i 2026, og avstanden i billetter gjelder hele sesongen."),
+    h("div", { class: "regler" }, ...regler.map(regelRad)),
+    h("p", { class: "naa-linje svak" }, "Nå: ", h("b", { class: "tall" }, naaTekst), s.ramme != null ? [". Rammen er ", h("b", { class: "tall" }, kr(s.ramme))] : ". Ingen ramme satt", "."),
+    h("h3", { class: "grenser-tittel" }, "Grensene"),
+    tabell));
 }
 
 function fyllResultater(innhold, res) {

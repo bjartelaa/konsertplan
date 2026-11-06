@@ -196,3 +196,87 @@ export function beregnScenarioer(sesong, saler, program) {
 
 /** Dyp kopi uten funksjoner, til lagring og «tilbake til casen». */
 export const kopi = x => JSON.parse(JSON.stringify(x));
+
+/* ---------- Hva snur rådet: grenser og beslutningsregler ----------
+ * Grensene finnes med halveringssøk i motoren, ikke med datatabell og interpolasjon som i arbeidsboka.
+ * Derfor kan en grense avvike med noen hundredels prosentpoeng fra arbeidsboka der kurven har en knekk
+ * (en konsert treffer taket i salen) inne i et interpolasjonssteg.
+ */
+
+/** Handlingene som sammenlignes: alt i hver sal, egen plan når den blander, og avstå. hent(sesong) regner handlingen med en variant av sesongen. */
+export function handlinger(sesong, saler, program) {
+  const ut = saler.map(s => ({ id: s.id, navn: s.navn, kort: s.kort, farge: s.farge, type: "sal",
+                               hent: v => beregnAltI(v, saler, program, s) }));
+  if (new Set(program.map(k => k.salId)).size > 1) ut.push({ id: "egen", navn: "Egen plan", type: "egen", farge: "gronn", hent: v => beregnPlan(v, saler, program, k => k.salId) });
+  ut.push({ id: "avstaa", navn: "Avstå", type: "avstaa", farge: "graa", hent: () => ({ nv: 0, behov: 0, holderRammen: true }) });
+  return ut;
+}
+
+/**
+ * Halveringssøk etter punktet der ok(x) går fra usann (ved lo) til sann (ved hi).
+ * Returnerer { verdi, status }: status "grense" med verdien, "aldri" hvis ok allerede ved lo (grensen finnes ikke
+ * i intervallet), "alltid" hvis ok heller ikke ved hi.
+ */
+export function finnGrense(ok, lo, hi, iter = 45) {
+  if (ok(lo)) return { verdi: null, status: "aldri" };
+  if (!ok(hi)) return { verdi: null, status: "alltid" };
+  for (let i = 0; i < iter; i++) { const m = (lo + hi) / 2; if (ok(m)) hi = m; else lo = m; }
+  return { verdi: (lo + hi) / 2, status: "grense" };
+}
+
+const FULLT_HUS = 10; // etterspørselsfaktor så høy at alle salene er fulle på alle konsertene
+
+/**
+ * Grensene for hver handling, med de andre forutsetningene som de er nå:
+ *   nvNegativUnder:   etterspørselsfaktoren der nåverdien blir negativ (lavere salg gir tap)
+ *   overRammenUnder:  etterspørselsfaktoren der finansieringsbehovet går over rammen
+ *   pakkeOverRammen:  pakkeprisen der behovet går over rammen (høyere pakke gir brudd)
+ * status "aldri" betyr at grensen ikke finnes (for eksempel: holder rammen selv uten salg), "alltid" at handlingen
+ * er på feil side uansett (B går over rammen selv med fullt hus). Avstå tas ikke med.
+ */
+export function grenser(sesong, saler, program) {
+  const ramme = sesong.ramme;
+  const sumSalg = program.reduce((a, k) => a + (k.forventetSalg ?? 0), 0);
+  return handlinger(sesong, saler, program).filter(hd => hd.type !== "avstaa").map(hd => {
+    const vedSalg = x => hd.hent({ ...sesong, etterspoerselsfaktor: x });
+    const vedPakke = p => hd.hent({ ...sesong, pakke: p });
+    const naa = hd.hent(sesong);
+    const nvNegativUnder = finnGrense(x => vedSalg(x).nv >= 0, 0, FULLT_HUS);
+    const overRammenUnder = ramme == null ? { verdi: null, status: "aldri" } : finnGrense(x => vedSalg(x).behov <= ramme, 0, FULLT_HUS);
+    const pakkeOverRammen = ramme == null ? { verdi: null, status: "aldri" } : finnGrense(p => vedPakke(p).behov > ramme, 0, Math.max(200000, (sesong.pakke ?? 0) * 3));
+    const faktor = sesong.etterspoerselsfaktor ?? 1;
+    // Avstand fra der vi er nå til grensen, i billetter for hele sesongen (som Resultater F85 i arbeidsboka) og i kroner for pakken
+    const billetterTil = g => (g.status === "grense" ? (faktor - g.verdi) * sumSalg : null);
+    return { id: hd.id, navn: hd.navn, kort: hd.kort, farge: hd.farge, type: hd.type, nv: naa.nv, behov: naa.behov, holderRammen: naa.holderRammen,
+             nvNegativUnder: { ...nvNegativUnder, billetter: billetterTil(nvNegativUnder) },
+             overRammenUnder: { ...overRammenUnder, billetter: billetterTil(overRammenUnder) },
+             pakkeOverRammen: { ...pakkeOverRammen, kroner: pakkeOverRammen.status === "grense" ? pakkeOverRammen.verdi - (sesong.pakke ?? 0) : null } };
+  });
+}
+
+/**
+ * De tre beslutningsreglene fra arbeidsboka. Alle rangerer etter nåverdien med verdiene som gjelder nå:
+ *   1 Robust: høyest nåverdi blant handlingene som holder rammen nå og i alle scenarioene (oppsider holdes utenfor)
+ *   2 Verdi: høyest nåverdi blant handlingene som holder rammen nå
+ *   3 Uten ramme: høyest nåverdi uansett
+ * Avstå (nåverdi 0, holder alltid rammen) er alltid med, så regelen velger avstå når resten gir tap.
+ * Returnerer [{ nr, navn, krav, valg: { id, navn, nv }, kandidater: [id] }].
+ */
+export function beslutningsregler(sesong, saler, program) {
+  const hd = handlinger(sesong, saler, program);
+  const scenarioer = (sesong.scenarioer ?? []).filter(sc => !sc.oppside);
+  const holder = r => r.holderRammen !== false;
+  const naa = hd.map(x => ({ ...x, r: x.hent(sesong),
+                             iAlle: scenarioer.every(sc => holder(x.hent(velgScenario({ ...sesong }, sc)))) }));
+  const beste = liste => liste.reduce((a, b) => (b.r.nv > a.r.nv ? b : a));
+  const regel = (nr, navn, krav, filter) => {
+    const kandidater = naa.filter(filter);
+    const v = beste(kandidater);
+    return { nr, navn, krav, valg: { id: v.id, navn: v.navn, kort: v.kort, farge: v.farge, type: v.type, nv: v.r.nv, behov: v.r.behov }, kandidater: kandidater.map(x => x.id) };
+  };
+  return [
+    regel(1, "Robust", `Holder rammen nå og i ${scenarioer.length ? `alle ${scenarioer.length} scenarioene` : "alle scenarioene"}`, x => holder(x.r) && x.iAlle),
+    regel(2, "Verdi", "Holder rammen med verdiene nå", x => holder(x.r)),
+    regel(3, "Uten ramme", "Høyest nåverdi uansett finansiering", () => true),
+  ];
+}

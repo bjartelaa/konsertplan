@@ -28,6 +28,12 @@ Konsekvenstabellen under gliderne viser nåverdi og finansieringsbehov for hver 
 
 Lokaleeffekt per sal (`sal.lokaleeffekt`, standard 100 %) står på salkortet under Saler og tilsvarer Forutsetninger D52:D54 i arbeidsboka: salget i salen i forhold til etterspørselen, med taket i salen som før. Det er gruppas egen følsomhet, ikke casens premiss, og Resultater viser en merknad så lenge en sal har noe annet enn 100 %. Testet mot datatabellen i arbeidsboka (B og C 70 % og 50 %, A 110 %, A med fullt hus 155 704 kr) og grensen der C blir like god som A (85,44 %, behov 229 001 kr).
 
+## Hva snur rådet
+
+Øverst i Resultater står de tre beslutningsreglene fra arbeidsboka og grensene der svaret snur (`beslutningsregler` og `grenser` i `src/motor.js`). Handlingene er alt i hver sal, egen plan når den blander, og avstå. Alle reglene rangerer etter nåverdien med verdiene som gjelder nå (scenario eller glidere). Regel 1 (robust) krever i tillegg at rammen holder i alle scenarioene utenom oppsider, regel 2 (verdi) at den holder nå, regel 3 ser bort fra rammen. Avstå har nåverdi null og holder alltid rammen, så reglene velger avstå når resten gir tap. I casen gir det avstå, C og B.
+
+Grensene finnes med halveringssøk i motoren (`finnGrense`), ikke med datatabell og interpolasjon som i arbeidsboka: etterspørselen der nåverdien blir negativ, etterspørselen der behovet går over rammen (med pakkeprisen som gjelder nå), og pakkeprisen der behovet går over rammen (med etterspørselen som gjelder nå). Under hvert tall står avstanden fra der vi er nå, i billetter for hele sesongen (som Resultater F85 i arbeidsboka) eller i kroner. «Alltid» betyr at handlingen er på feil side uansett (B går over rammen selv med fullt hus), «aldri» at grensen ikke finnes. Testene krever A 86,7 %, B 80,8 % og C 79,8 % for nåverdien, A 83,0 % og C 75,9 % for rammen, og pakkegrensen for C 66 661 kr ved 100 % salg og 61 377 kr ved 80 %. A avviker 0,02 prosentpoeng fra arbeidsboka fordi kurven har en knekk ved 86,2 % (konsert 12 treffer taket) inne i interpolasjonssteget.
+
 ## Reglene
 
 Fra oppgaveteksten og arbeidsboka `Sceneskift_AK2_modell.xlsx`. Per konsert i måned m med N betalte billetter: oppgjør N × (350 − 10) i måned m + 1, publikumsutgift N × 10 i måned m, pakke 30 000 måneden før og 30 000 i konsertmåneden. Leie etter salens byggeklosser: fast beløp per konsert, andel av oppgjøret med minimum, engangsbeløp, eller sesongleie med betalingsplan. Nåverdi med (1,04)^(t/12). Finansieringsbehov er laveste saldo ved månedsslutt.
@@ -39,7 +45,7 @@ Kontrolltallene (basis): nåverdi A 51 324, B 201 394, C 173 787 kr, behov A 231
 ## Filer
 
 - `index.html`, `css/konsertplan.css`: siden
-- `src/motor.js`: regnemotoren, uten DOM. Også scenarioene (`aktivtScenario`, `velgScenario`, `beregnScenarioer`)
+- `src/motor.js`: regnemotoren, uten DOM. Også scenarioene (`aktivtScenario`, `velgScenario`, `beregnScenarioer`) og hva som snur rådet (`handlinger`, `finnGrense`, `grenser`, `beslutningsregler`)
 - `src/forslag.js`: sjangerregelen (sjanger gir oppsett, forventet salg gir sal)
 - `src/standard-2027.js`: Sceneskift 2027 som standardsesong, med de fem scenarioene fra arbeidsboka
 - `src/lagring.js`, `src/figurer.js`, `src/app.js`: lagring, SVG-figurer, grensesnitt
