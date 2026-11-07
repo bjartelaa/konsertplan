@@ -1,7 +1,7 @@
 // Sjangerregel: sjanger gir forslag til oppsett (sitte eller stå), forventet salg gir forslag
 // til sal (den billigste salen som kan velges per konsert og har plass i det oppsettet).
 // Regelen er enkel med vilje, og vises åpent i grensesnittet så Maja kan overstyre den.
-import { beregnPlan, billetter, fasteLeiebetalinger, kapasitet, leieForKonsert } from "./motor.js";
+import { barTilSceneskift, beregnPlan, billetter, fasteLeiebetalinger, kapasitet, leieForKonsert } from "./motor.js";
 
 export const SITTENDE = ["indiefolk", "visepop", "jazz", "nordisk soul", "soul / jazz", "soul", "drømmepop", "folk", "klassisk", "vise"];
 export const STAAENDE = ["alternativ pop", "elektronika", "shoegaze", "indierock", "synthpop", "elektronisk pop", "pop", "rock", "hiphop", "elektronisk"];
@@ -25,7 +25,7 @@ export function forslagForKonsert(sesong, saler, konsert) {
     const b = billetter(sesong, konsert, s, oppsett);
     if (!b.mulig) return null;
     const leie = leieForKonsert(sesong, s, b.n).sum;
-    const bidrag = b.n * (sesong.billettpris - sesong.gebyr - sesong.utgiftPerBillett) - leie;
+    const bidrag = b.n * (sesong.billettpris - sesong.gebyr - sesong.utgiftPerBillett + barTilSceneskift(sesong)) - leie;
     return { sal: s, n: b.n, onsket: b.onsket, kap: b.kap, kappet: b.kappet, leie, bidrag };
   }).filter(Boolean);
   if (vurdert.length === 0) return null;
@@ -57,7 +57,7 @@ const oppsettTekst = o => (o === "sitte" ? "Sittende" : "Stående");
  */
 export function besteBlanding(sesong, saler, program) {
   const kandidater = saler.filter(s => !s.kunHelSesong);
-  const margin = sesong.billettpris - sesong.gebyr - sesong.utgiftPerBillett;
+  const margin = sesong.billettpris - sesong.gebyr - sesong.utgiftPerBillett + barTilSceneskift(sesong); // bar er utvidelse, standard 0
   const valgPerKonsert = program.map(k => kandidater.map(s => {
     let best = null;
     for (const oppsett of ["staa", "sitte"]) {

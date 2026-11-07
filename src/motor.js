@@ -13,6 +13,12 @@
 //   leie             etter salens byggeklosser
 //   N = min(forventetSalg × etterspørselsfaktor × salens lokaleeffekt, plasser i salen)
 //
+// Utvidelser utenfor casen. Alle har standard 0 og gir da casens tall, fordi oppgaveteksten sier at det
+// utover postene i tabellen og lokaleleien ikke er andre inntekter eller kostnader:
+//   bar              + N × sesong.barPerGjest × sesong.barAndel   i m + 1 (gjøres opp som billettene)
+//   uforutsett       − sesong.uforutsett                          i m (kostnader pakken ikke dekker)
+//   pakke per konsert: pakken for konserten er sesong.pakke + konsert.pakkeAvvik
+//
 // Byggeklosser for leie (sal.leie er en liste):
 //   { type: "perKonsert", belop, naar }                 naar: "konsertmaaned" | "maanedEtter" | "maanedFoer"
 //   { type: "andel", andel, minimum, naar }             andel av billettoppgjøret etter gebyr, minst minimum per konsert
@@ -65,6 +71,25 @@ export function fasteLeiebetalinger(sal) {
   return ut;
 }
 
+/** Pakken for én konsert: sesongens pakke pluss konsertens avvik (utvidelse, standard 0). */
+export function pakkeFor(sesong, konsert) {
+  return (sesong.pakke ?? 0) + (konsert.pakkeAvvik ?? 0);
+}
+
+/** Barinntekt til Sceneskift per betalt billett: omsetning per gjest × Sceneskifts andel (utvidelse, standard 0). */
+export function barTilSceneskift(sesong) {
+  return (sesong.barPerGjest ?? 0) * (sesong.barAndel ?? 0);
+}
+
+/** Utvidelsene utenfor casen som er i bruk nå (ulik 0), til merknader i grensesnittet. */
+export function utvidelserIBruk(sesong, program) {
+  const ut = [];
+  if (barTilSceneskift(sesong)) ut.push("bar");
+  if (sesong.uforutsett) ut.push("uforutsett");
+  if (program.some(k => k.pakkeAvvik)) ut.push("pakkeAvvik");
+  return ut;
+}
+
 export function fastLeieSum(sal) {
   return fasteLeiebetalinger(sal).reduce((s, p) => s + p.belop, 0);
 }
@@ -102,27 +127,33 @@ export function beregnPlan(sesong, saler, program, salVelger) {
   const salerIBruk = [...new Set(valgt.filter(Boolean))];
   const T = sisteTidspunkt(program, salerIBruk);
   const cf = new Array(T + 1).fill(0);
-  const linjer = { billetter: cf.slice(), utgift: cf.slice(), pakke: cf.slice(), leie: cf.slice() };
+  const linjer = { billetter: cf.slice(), utgift: cf.slice(), pakke: cf.slice(), leie: cf.slice(), bar: cf.slice(), uforutsett: cf.slice() };
   const legg = (linje, t, belop) => { const i = Math.max(0, Math.min(T, t)); cf[i] += belop; linjer[linje][i] += belop; };
 
   const del1 = sesong.pakkeDel1Andel ?? 0.5;
+  const barPerBillett = barTilSceneskift(sesong);
+  const uforutsett = sesong.uforutsett ?? 0;
   const perKonsert = program.map((k, i) => {
     const sal = valgt[i];
     const m = k.maaned;
-    if (!sal) return { nr: k.nr, sal: null, n: 0, mulig: false, kappet: false, billettnetto: 0, utgift: 0, pakke: sesong.pakke, leie: 0, bidrag: -sesong.pakke };
+    const pakke = pakkeFor(sesong, k);
+    if (!sal) return { nr: k.nr, sal: null, n: 0, mulig: false, kappet: false, billettnetto: 0, utgift: 0, pakke, leie: 0, bar: 0, uforutsett: 0, bidrag: -pakke };
     const b = billetter(sesong, k, sal);
     const n = b.n;
     const billettnetto = n * (sesong.billettpris - sesong.gebyr);
     const utgift = n * sesong.utgiftPerBillett;
+    const bar = n * barPerBillett;
     legg("billetter", m + 1, billettnetto);
     legg("utgift", m, -utgift);
-    legg("pakke", m - 1, -sesong.pakke * del1);
-    legg("pakke", m, -sesong.pakke * (1 - del1));
+    legg("pakke", m - 1, -pakke * del1);
+    legg("pakke", m, -pakke * (1 - del1));
+    if (bar) legg("bar", m + 1, bar);
+    if (uforutsett) legg("uforutsett", m, -uforutsett);
     const leie = leieForKonsert(sesong, sal, n);
     for (const d of leie.deler) legg("leie", m + (NAAR[d.naar] ?? 0), -d.belop);
     return { nr: k.nr, sal: sal.id, n, onsket: b.onsket, kap: b.kap, mulig: b.mulig, kappet: b.kappet,
-             billettnetto, utgift, pakke: sesong.pakke, leie: leie.sum, leieDeler: leie.deler,
-             bidrag: billettnetto - utgift - sesong.pakke - leie.sum };
+             billettnetto, utgift, pakke, leie: leie.sum, leieDeler: leie.deler, bar, uforutsett,
+             bidrag: billettnetto - utgift - pakke - leie.sum + bar - uforutsett };
   });
 
   const faste = [];
@@ -279,4 +310,81 @@ export function beslutningsregler(sesong, saler, program) {
     regel(2, "Verdi", "Holder rammen med verdiene nå", x => holder(x.r)),
     regel(3, "Uten ramme", "Høyest nåverdi uansett finansiering", () => true),
   ];
+}
+
+/* ---------- Rådet for Maja ----------
+ * Regelen i beslutningsnotatet (levert 29.10.2026): høyest nåverdi blant handlingene som holder rammen både med
+ * verdiene nå og ved 20 % lavere salg. Salget kan ikke rettes opp etter signering, så regelen tester det. Pakkeprisen
+ * kjenner Maja før hun signerer, så den er et vilkår og ikke en del av regelen. Med verdiene i casen gir regelen C,
+ * som i notatet. Regel 1 til 3 over er arbeidsbokas regler, og notatets regel ligger mellom regel 1 og 2.
+ */
+export const LAVERE_SALG = 0.8; // «20 % lavere salg» i notatet
+
+/** Handlingen regelen velger med en gitt sesong. hd er handlinger(...), som ikke avhenger av sesongen. */
+function notatValg(sesong, hd) {
+  const ramme = sesong.ramme;
+  const lav = { ...sesong, etterspoerselsfaktor: (sesong.etterspoerselsfaktor ?? 1) * LAVERE_SALG };
+  const holder = r => ramme == null || r.behov <= ramme;
+  let best = null;
+  for (const x of hd) {
+    const naa = x.hent(sesong);
+    if (!holder(naa) || !holder(x.hent(lav))) continue;
+    if (!best || naa.nv > best.nv) best = { id: x.id, nv: naa.nv, hd: x };
+  }
+  return best;
+}
+
+/**
+ * Rådet med verdiene nå, og det som snur det. Returnerer:
+ *   valg          handlingen regelen velger, med tallene nå og ved 20 % lavere salg
+ *   alle          alle handlingene med de samme tallene, tapte billetter (salen er full) og leie før første konsert
+ *   grense        salgs- og pakkegrensene for valget (som grenser()), og pakkeLav: pakkegrensen ved 20 % lavere salg
+ *   snu           punktene der regelen velger noe annet: ramme (mer startfinansiering), bar (kr mer per gjest til
+ *                 Sceneskift) og uforutsett (kr mer per konsert). { verdi, status, til } som finnGrense, til er det nye valget
+ *   barPer10      hvor mye nåverdien for valget øker med 10 kr mer per gjest til Sceneskift
+ */
+export function raadet(sesong, saler, program) {
+  const hd = handlinger(sesong, saler, program);
+  const ramme = sesong.ramme;
+  const lav = { ...sesong, etterspoerselsfaktor: (sesong.etterspoerselsfaktor ?? 1) * LAVERE_SALG };
+  const holder = r => ramme == null || r.behov <= ramme;
+  const alle = hd.map(x => {
+    const naa = x.hent(sesong), l = x.hent(lav);
+    const tapte = (naa.perKonsert ?? []).reduce((a, k) => a + Math.max(0, (k.onsket ?? 0) - k.n), 0);
+    const fulle = (naa.perKonsert ?? []).filter(k => k.kappet).length;
+    const bunnTid = naa.saldo ? naa.saldo.indexOf(Math.min(...naa.saldo)) : 0;
+    return { id: x.id, navn: x.navn, kort: x.kort, farge: x.farge, type: x.type,
+             nv: naa.nv, behov: naa.behov, netto: naa.netto ?? 0, nvLav: l.nv, behovLav: l.behov,
+             holderNaa: holder(naa), holderLav: holder(l), tapteBilletter: tapte, fulleKonserter: fulle,
+             leieFoerStart: naa.linjer ? -naa.linjer.leie[0] : 0, bunnTid, saldo: naa.saldo ?? null };
+  });
+  const v = notatValg(sesong, hd);
+  const valg = alle.find(x => x.id === v.id);
+  const info = id => { const x = alle.find(y => y.id === id); return x ? { id: x.id, navn: x.navn, kort: x.kort, farge: x.farge, type: x.type } : null; };
+
+  // Grensene for valget. Avstå har ingen grenser
+  let grense = null;
+  if (valg.type !== "avstaa") {
+    grense = grenser(sesong, saler, program).find(g => g.id === valg.id);
+    const hent = v.hd.hent;
+    grense.pakkeLav = ramme == null ? { verdi: null, status: "aldri" }
+      : finnGrense(p => hent({ ...lav, pakke: p }).behov > ramme, 0, Math.max(200000, (sesong.pakke ?? 0) * 3));
+  }
+
+  // Der regelen velger noe annet. Søket legger til på toppen av verdiene nå, så x = 0 gir dagens råd
+  const snuPunkt = (endre, hi) => {
+    const g = finnGrense(x => notatValg(endre(x), hd)?.id !== valg.id, 0, hi, 40);
+    const til = g.status === "grense" ? notatValg(endre(g.verdi * (1 + 1e-9) + 1e-6), hd) : null;
+    return { ...g, til: til ? info(til.id) : null };
+  };
+  const barNaa = barTilSceneskift(sesong);
+  const snu = {
+    ramme: ramme == null ? null : snuPunkt(x => ({ ...sesong, ramme: ramme + x }), 2000000),
+    bar: snuPunkt(x => ({ ...sesong, barPerGjest: barNaa + x, barAndel: 1 }), 2000),
+    uforutsett: snuPunkt(x => ({ ...sesong, uforutsett: (sesong.uforutsett ?? 0) + x }), 200000),
+  };
+  if (snu.ramme?.status === "grense") snu.ramme.verdi += ramme; // som beløp, ikke som tillegg
+  const barPer10 = valg.type === "avstaa" ? 0 : v.hd.hent({ ...sesong, barPerGjest: barNaa + 10, barAndel: 1 }).nv - valg.nv;
+  return { regel: "Høyest verdi blant valgene som holder rammen både nå og ved 20 % lavere salg", ramme,
+           lavFaktor: lav.etterspoerselsfaktor, valg, alle, grense, snu, barPer10 };
 }

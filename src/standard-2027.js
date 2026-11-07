@@ -17,6 +17,11 @@ export const SESONG_2027 = {
   ramme: 250000,             // startfinansiering Maja tror hun kan skaffe
   etterspoerselsfaktor: 1,   // 1 = Majas premiss: samme salg som 2026
   laanRente: 0.12,           // årlig rente på lån ut over rammen (kassekreditt). Gruppas antakelse, ikke fra casen
+  // Utvidelser utenfor casen. Oppgaveteksten: «Utover postene i tabellen og lokaleleien er det ingen andre inntekter
+  // eller kostnader.» Derfor står de på 0, som gir casens tall. De kan settes for å vise hva som skjer om det ikke stemmer.
+  barPerGjest: 0,            // omsetning i baren per betalt billett, kr
+  barAndel: 0,               // Sceneskifts andel av baromsetningen, gjøres opp måneden etter som billettene
+  uforutsett: 0,             // buffer for kostnader pakken ikke dekker, kr per konsert, betalt i konsertmåneden
   scenarioer: [],            // fylles med SCENARIOER_2027 under
   maanedsnavn: ["Før januar", "Januar", "Februar", "Mars", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Desember"],
 };
@@ -93,6 +98,7 @@ export const PROGRAM_2027 = P.map(([nr, dato, artist, sjanger, besetning, maaned
   i2026: { navn: navn2026, lokale: lokale2026, kapasitet: kap2026 },
   forventetSalg: salg2026,
   salId: "C",            // casens råd som utgangspunkt
+  pakkeAvvik: 0,         // utvidelse: pakken for denne konserten minus sesongens pakke. 0 i casen (fast pris for alle)
   oppsett: "staa",
   notat: nr === 6 ? "«Vårens største navn» ifølge Sceneskift" : "",
 }));
