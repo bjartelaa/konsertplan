@@ -119,3 +119,10 @@ test("rådet med beste blanding i programmet: egen plan velges og er merket som 
   assert.equal(r0(r.valg.nv), 192021);
   assert.ok(r.valg.behovLav <= 250000);
 });
+
+test("lokaleeffekt: C kan selge ned til 85,44 % av etterspørselen før A er like god (arbeidsboka, Usikkerhet del 6)", async () => {
+  const { lokaleeffektGrense } = await import("../src/motor.js");
+  const d = standardSesong();
+  const g = lokaleeffektGrense(d.sesong, d.saler, d.program, "C", "A");
+  assert.equal(Math.round(g.verdi * 10000) / 100, 85.44);
+});

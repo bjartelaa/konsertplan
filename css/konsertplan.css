@@ -520,3 +520,83 @@ body:not(.forklar) .forutsetninger .rad { grid-template-columns: minmax(220px, 1
 @media (max-width: 760px) {
   .regel { grid-template-columns: 1fr; gap: 6px; }
 }
+
+/* Rådet: anbefalingen øverst, så hvorfor, to tall, når rådet snur, artisten og utenfor casen */
+body.fane-raadet .stripe { display: none; }
+.anbefaling {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr);
+  background: var(--papir);
+  box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  border-radius: 4px;
+  border-left: 8px solid var(--c, var(--graa));
+  overflow: hidden;
+}
+.anb-tekst { padding: 26px 30px 24px; }
+.anb-over { font-family: "Marker", cursive; font-size: 17px; color: var(--blekk-svak); transform: rotate(-1.5deg); transform-origin: left; display: inline-block; }
+.seksjon h2.anb-tittel { font-size: 44px; font-weight: 800; font-stretch: 82%; letter-spacing: -.02em; line-height: 1.02; margin: 6px 0 4px; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.seksjon h2.anb-tittel .merke { font-size: 13px; letter-spacing: 0; }
+.anb-under { font-size: 18px; color: var(--blekk-svak); margin-bottom: 12px; }
+.vilkaar { margin: 0; padding: 0; list-style: none; counter-reset: vilkaar; display: grid; gap: 10px; max-width: 70ch; }
+.vilkaar li { counter-increment: vilkaar; display: grid; grid-template-columns: 30px 1fr; gap: 10px; font-size: 16px; line-height: 1.4; }
+.vilkaar li::before { content: counter(vilkaar); width: 26px; height: 26px; border-radius: 50%; background: var(--c, var(--graa)); color: #fff; font-weight: 700; font-size: 14px; display: grid; place-items: center; margin-top: 1px; }
+.anb-ellers { margin-top: 14px; color: var(--blekk-svak); max-width: 70ch; }
+.anb-spor { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--strek-svak); max-width: 72ch; }
+.anb-spor h3 { font-size: 14px; font-weight: 600; color: var(--blekk-svak); margin-bottom: 6px; }
+.anb-spor ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14.5px; }
+.anb-bilde { position: relative; min-height: 260px; background: #2a2a2a; }
+.anb-bilde img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.anb-bilde .kilde { position: absolute; left: 0; right: 0; bottom: 0; padding: 8px 12px; font-size: 12px; color: #eee; background: linear-gradient(transparent, rgba(0,0,0,.7)); }
+.anb-bilde .kilde a { color: #fff; }
+.gjelder { margin-top: 10px; }
+.gjelder + .seksjon { margin-top: 44px; }
+.gjelder .naa-linje { margin-top: 6px; max-width: 90ch; }
+.gjelder .varsel { margin-top: 10px; }
+
+.raad-kort-rad { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.raad-kort { display: flex; flex-direction: column; }
+.raad-kort.valgt { box-shadow: 0 0 0 2.5px var(--c, var(--graa)), 0 2px 8px rgba(0,0,0,.08); }
+.raad-kort .leietype { margin: -2px 0 10px; }
+.raad-kort .kort-linjer { margin-top: 12px; display: grid; gap: 4px; color: var(--blekk-svak); }
+.merke.raad-merke { color: var(--c, var(--blekk)); border-color: currentColor; }
+.avstaa-kort .stor { color: var(--blekk-svak); }
+
+.forklar-rad { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+.forklar-kort { background: var(--papir); box-shadow: 0 1px 3px rgba(0,0,0,.08); border-radius: 4px; padding: 20px 24px; }
+.forklar-kort h3 { font-size: 19px; font-weight: 700; font-stretch: 92%; margin-bottom: 4px; }
+.forklar-kort .stor { font-size: 36px; font-weight: 700; font-stretch: 84%; letter-spacing: -.015em; line-height: 1.05; }
+.forklar-kort .stor-etikett { font-size: 13px; color: var(--blekk-svak); margin-bottom: 10px; }
+.forklar-kort p + p { margin-top: 8px; }
+.forklar-kort p { max-width: 62ch; }
+.raad-figur { margin-top: 18px; max-width: 900px; }
+
+.snu-kort .stor { margin: 2px 0 8px; }
+.snu-kort p { max-width: 40ch; }
+
+.blanding { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; margin: 4px 0 14px; }
+.blanding-konsert { background: var(--papir); border-top: 6px solid var(--c, var(--graa)); border-radius: 3px; padding: 8px 8px 9px; box-shadow: 0 1px 2px rgba(0,0,0,.07); display: grid; gap: 2px; min-width: 0; }
+.blanding-nr { font-size: 12.5px; color: var(--blekk-svak); }
+.blanding-sal { font-size: 20px; font-weight: 800; font-stretch: 84%; line-height: 1; color: var(--c, var(--blekk)); }
+.blanding-artist { font-size: 12px; color: var(--blekk-svak); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.blanding-salg { font-size: 12px; color: var(--blekk-svak); }
+.blanding-tekst { max-width: 80ch; margin-top: 6px; }
+.blanding-tekst b { font-weight: 600; }
+
+.utenfor th, .utenfor td { vertical-align: top; padding: 13px 14px; }
+.utenfor td { font-size: 14.5px; }
+.utenfor td.utenfor-navn { font-weight: 700; font-stretch: 92%; font-size: 15.5px; white-space: nowrap; }
+.utenfor td:last-child { max-width: 52ch; min-width: 30ch; color: var(--blekk); }
+.utenfor-felt { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; font-size: 14px; }
+.utenfor-felt label { display: inline-flex; align-items: baseline; gap: 4px; color: var(--blekk-svak); white-space: nowrap; }
+.utenfor td .utenfor-felt input[type="number"] { width: 8ch; font-size: 16px; font-weight: 600; color: var(--blekk); border-bottom-color: var(--strek); }
+
+.program td.pakke input { width: 8ch; color: var(--blekk-svak); }
+
+@media (max-width: 760px) {
+  .anbefaling { grid-template-columns: 1fr; }
+  .anb-bilde { min-height: 180px; order: -1; }
+  .anb-tekst { padding: 20px 18px; }
+  .seksjon h2.anb-tittel { font-size: 34px; }
+  .blanding { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .forklar-rad { grid-template-columns: 1fr; }
+}

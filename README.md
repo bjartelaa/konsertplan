@@ -8,7 +8,7 @@ Sceneskift, salene og tallene er fiktive og laget for undervisning. Privat til e
 
 Dobbeltklikk `index.html`. Siden trenger ikke nett og ingen server. Alt regnes i nettleseren og lagres i nettleserens lokale lager på maskinen. «Lagre sesong» gir en JSON-fil som kan åpnes igjen med «Åpne sesong», også på en annen maskin.
 
-Fanene kan lenkes direkte: `index.html#program`, `#resultater`, `#saler`, `#forutsetninger`. Åpnes siden fra presentasjonen (`index.html?fra=presentasjon#program`), vises «Tilbake til presentasjonen» øverst. Lenken går til `../sceneskift-kart/site/index.html`, så de to repoene må ligge i samme mappe. Uten `?fra=presentasjon` er lenken skjult. Med `&tilbake=slutt` går lenken rett til den siden (`#slutt`, avslutningen) i stedet for tilbake i historikken.
+Fanene kan lenkes direkte: `index.html#raadet` (første fane, åpnes uten lenke), `#program`, `#resultater`, `#saler`, `#forutsetninger`. Åpnes siden fra presentasjonen (`index.html?fra=presentasjon#program`), vises «Tilbake til presentasjonen» øverst. Lenken går til `../sceneskift-kart/site/index.html`, så de to repoene må ligge i samme mappe. Uten `?fra=presentasjon` er lenken skjult. Med `&tilbake=slutt` går lenken rett til den siden (`#slutt`, avslutningen) i stedet for tilbake i historikken.
 
 ## Sceneskift 2027 er utgangspunktet
 
@@ -34,6 +34,20 @@ Lokaleeffekt per sal (`sal.lokaleeffekt`, standard 100 %) står på salkortet un
 
 Grensene finnes med halveringssøk i motoren (`finnGrense`), ikke med datatabell og interpolasjon som i arbeidsboka: etterspørselen der nåverdien blir negativ, etterspørselen der behovet går over rammen (med pakkeprisen som gjelder nå), og pakkeprisen der behovet går over rammen (med etterspørselen som gjelder nå). Under hvert tall står avstanden fra der vi er nå, i billetter for hele sesongen (som Resultater F85 i arbeidsboka) eller i kroner. «Alltid» betyr at handlingen er på feil side uansett (B går over rammen selv med fullt hus), «aldri» at grensen ikke finnes. Testene krever A 86,7 %, B 80,8 % og C 79,8 % for nåverdien, A 83,0 % og C 75,9 % for rammen, og pakkegrensen for C 66 661 kr ved 100 % salg og 61 377 kr ved 80 %. A avviker 0,02 prosentpoeng fra arbeidsboka fordi kurven har en knekk ved 86,2 % (konsert 12 treffer taket) inne i interpolasjonssteget.
 
+## Rådet
+
+Første fane er rådet til Maja på hennes språk, regnet av motoren (`raadet` i `src/motor.js`). Regelen er den i beslutningsnotatet: høyest nåverdi blant handlingene som holder rammen både med verdiene nå og ved 20 % lavere salg. Pakkeprisen kjenner Maja før hun signerer, så den er et vilkår og ikke en del av regelen. I casen gir det C, med tre vilkår: rammen er bekreftet (C trenger 216 696 kr, 240 361 kr ved 20 % lavere salg), pakken er bekreftet (ved 20 % lavere salg holder C bare under 61 377 kr), og 450 plasser er salgbare. Gir regelen avstå, viser fanen hva som kan snu det.
+
+Under anbefalingen: ett kort per handling med verdi og hva den krever, nåverdi og finansieringsbehov forklart uten fagord (med én saldofigur), og når rådet snur (salget der C taper penger, 79,8 %, salget der rammen ryker, 75,9 %, pakken der rammen ryker, og startfinansieringen som gir et annet råd: 372 120 kr gir B). Deretter praksisvinkelen «Artisten bestemmer salen» med beste blanding per konsert, og «Der vi går utenfor casen»: tabell over alt vi legger til utover casen, med verdien i casen, verdien nå og hva det gjør med rådet.
+
+Utvidelsene utenfor casen har standard 0, fordi oppgaveteksten sier at det utover postene i tabellen og lokaleleien ikke er andre inntekter eller kostnader:
+
+- Bar: omsetning per gjest (`barPerGjest`) og Sceneskifts andel (`barAndel`). Inn måneden etter konserten, som billettene. Snur ikke rådet i casen, fordi B er over rammen allerede i januar, før det første oppgjøret kommer. 10 kr per gjest til Sceneskift gir C 32 994 kr mer i nåverdi.
+- Uforutsette kostnader (`uforutsett`), kr per konsert i konsertmåneden, for det pakken ikke dekker. C tåler 1 606,5 kr per konsert før den ikke holder rammen ved 20 % lavere salg (bunnen er i mars, 9 639 kr under rammen etter seks konserter).
+- Pakkepris per konsert (`konsert.pakkeAvvik`): avviket fra sesongens pakke, endres i kolonnen Pakke i Programmet. Ligger oppå scenarioets pakke.
+
+Alle tre endres under Rådet og Forutsetninger. Resultater og Rådet viser en merknad så lenge en av dem er i bruk.
+
 ## Reglene
 
 Fra oppgaveteksten og arbeidsboka `Sceneskift_AK2_modell.xlsx`. Per konsert i måned m med N betalte billetter: oppgjør N × (350 − 10) i måned m + 1, publikumsutgift N × 10 i måned m, pakke 30 000 måneden før og 30 000 i konsertmåneden. Leie etter salens byggeklosser: fast beløp per konsert, andel av oppgjøret med minimum, engangsbeløp, eller sesongleie med betalingsplan. Nåverdi med (1,04)^(t/12). Finansieringsbehov er laveste saldo ved månedsslutt.
@@ -45,7 +59,7 @@ Kontrolltallene (basis): nåverdi A 51 324, B 201 394, C 173 787 kr, behov A 231
 ## Filer
 
 - `index.html`, `css/konsertplan.css`: siden
-- `src/motor.js`: regnemotoren, uten DOM. Også scenarioene (`aktivtScenario`, `velgScenario`, `beregnScenarioer`) og hva som snur rådet (`handlinger`, `finnGrense`, `grenser`, `beslutningsregler`)
+- `src/motor.js`: regnemotoren, uten DOM. Også scenarioene (`aktivtScenario`, `velgScenario`, `beregnScenarioer`), hva som snur rådet (`handlinger`, `finnGrense`, `grenser`, `beslutningsregler`) og rådet for Maja (`raadet`, `lokaleeffektGrense`, utvidelsene `pakkeFor`, `barTilSceneskift`, `utvidelserIBruk`)
 - `src/forslag.js`: sjangerregelen (sjanger gir oppsett, forventet salg gir sal)
 - `src/standard-2027.js`: Sceneskift 2027 som standardsesong, med de fem scenarioene fra arbeidsboka
 - `src/lagring.js`, `src/figurer.js`, `src/app.js`: lagring, SVG-figurer, grensesnitt

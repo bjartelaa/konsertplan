@@ -388,3 +388,15 @@ export function raadet(sesong, saler, program) {
   return { regel: "Høyest verdi blant valgene som holder rammen både nå og ved 20 % lavere salg", ramme,
            lavFaktor: lav.etterspoerselsfaktor, valg, alle, grense, snu, barPer10 };
 }
+
+/**
+ * Lokaleeffekten for salen salId der alt i salen gir samme nåverdi som alt i salen motId (med motIds lokaleeffekt
+ * som nå). Under grensen er motId bedre. Arbeidsboka: C kan selge ned til 85,44 % før A er like god.
+ */
+export function lokaleeffektGrense(sesong, saler, program, salId, motId) {
+  const sal = saler.find(s => s.id === salId), mot = saler.find(s => s.id === motId);
+  if (!sal || !mot) return null;
+  const nvMot = beregnAltI(sesong, saler, program, mot).nv;
+  const nvMed = x => { const s2 = { ...sal, lokaleeffekt: x }; return beregnAltI(sesong, saler.map(s => (s.id === salId ? s2 : s)), program, s2).nv; };
+  return finnGrense(x => nvMed(x) >= nvMot, 0, 1.5);
+}

@@ -1,5 +1,5 @@
 // Konsertplan: tilstand og rendering. Alt regnes på nytt ved hver endring.
-import { beregnAlle, beregnScenarioer, aktivtScenario, velgScenario, grenser, beslutningsregler, kapasitet, kopi } from "./motor.js";
+import { beregnAlle, beregnAltI, beregnScenarioer, aktivtScenario, velgScenario, grenser, beslutningsregler, kapasitet, kopi, raadet, utvidelserIBruk, pakkeFor, barTilSceneskift, lokaleeffektGrense } from "./motor.js";
 import { forslagForKonsert, besteBlanding } from "./forslag.js";
 import { SESONG_2027, SALER_2027, SCENARIOER_2027, SJANGRE, LOKALER_2026, standardSesong } from "./standard-2027.js";
 import { lesLokalt, lagreLokalt, slettLokalt, lastNedFil, lesFil } from "./lagring.js";
@@ -31,7 +31,7 @@ const svg = (label) => { const e = document.createElementNS("http://www.w3.org/2
 /** Forklarende tekst som bare vises når bryteren «Forklaringer» er på. */
 const fork = (tag, cls, ...barn) => h(tag, { class: `${cls} forklaring-tekst` }, ...barn);
 
-const state = { data: null, fane: "program", referanse: "C", forklar: false, besteBlanding: null };
+const state = { data: null, fane: "raadet", referanse: "C", forklar: false, besteBlanding: null };
 
 function salAv(id) { return state.data.saler.find(s => s.id === id); }
 function salerPerKonsert() { return state.data.saler.filter(s => !s.kunHelSesong); }
@@ -107,6 +107,7 @@ function reparer() {
     if (std) { k.i2026 ??= std.i2026; k.besetning ??= std.besetning; }
     k.oppsett ??= "staa";
     k.forventetSalg ??= k.salg2026 ?? 0;
+    k.pakkeAvvik ??= 0;
     let s = salAv(k.salId);
     if (!s || s.kunHelSesong) s = perKonsert[0];
     k.salId = s?.id ?? null;
@@ -128,11 +129,12 @@ function render() {
   document.getElementById("undertekst").textContent = `${d.program.length} konserter, ${d.saler.length} saler, ramme ${kr(d.sesong.ramme)}. Scenario: ${sc ? sc.navn : "egne verdier"}`;
   for (const b of document.querySelectorAll(".faner button")) b.setAttribute("aria-pressed", String(b.dataset.fane === state.fane));
   document.body.classList.toggle("fane-resultater", state.fane === "resultater");
+  document.body.classList.toggle("fane-raadet", state.fane === "raadet");
   const res = beregn();
   renderStripe(res);
   const main = document.getElementById("innhold");
   main.replaceChildren();
-  ({ program: renderProgram, resultater: renderResultater, saler: renderSaler, forutsetninger: renderForutsetninger })[state.fane](main, res);
+  ({ raadet: renderRaadetFane, program: renderProgram, resultater: renderResultater, saler: renderSaler, forutsetninger: renderForutsetninger })[state.fane](main, res);
 }
 
 function statusTekst(r) {
@@ -173,6 +175,279 @@ function renderStripe(res) {
     h("div", { class: "rad" }, "Ingen risiko, ingen inntekt")));
 }
 
+/* ---------- Rådet ---------- */
+// Rådet på Majas språk: anbefaling med vilkår, hvorfor, to tall forklart uten fagord, når rådet snur,
+// artisten bestemmer salen, og der vi går utenfor casen. Alle tall kommer fra motoren (raadet i motor.js).
+const pst1 = v => (Math.round(v * 1000) / 10).toLocaleString("nb-NO", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " %";
+const navnMedKort = v => (v.type === "sal" && v.kort ? `${v.navn} (${v.kort})` : v.type === "avstaa" ? "å avstå" : v.navn);
+function gaaTil(fane) { state.fane = fane; history.replaceState(null, "", "#" + fane); render(); window.scrollTo(0, 0); }
+
+/** Leievilkårene i én linje, på vanlig språk. */
+function leieType(sal) {
+  const deler = [];
+  let fast = 0;
+  for (const b of sal.leie ?? []) {
+    if (b.type === "perKonsert") deler.push(`fast leie, ${kr(b.belop)} per konsert`);
+    else if (b.type === "andel") deler.push(`leien følger salget, ${pst(b.andel)} av oppgjøret, minst ${kr(b.minimum ?? 0)}`);
+    else if (b.type === "engang") fast += b.belop;
+    else if (b.type === "sesong") fast += b.belop;
+  }
+  if (fast) deler.push(`fast sesongleie, ${kr(fast)} i alt`);
+  const t = deler.join(", ");
+  return t ? t[0].toUpperCase() + t.slice(1) : "";
+}
+
+function renderRaadetFane(main, res) {
+  const d = state.data;
+  const s = d.sesong;
+  const R = raadet(s, d.saler, d.program);
+  const v = R.valg;
+  const sc = aktivtScenario(s);
+  const ramme = s.ramme;
+  const faktor = s.etterspoerselsfaktor ?? 1;
+  const mnd = t => (t === 0 ? "før januar" : `i ${(s.maanedsnavn?.[t] ?? `måned ${t}`).toLowerCase()}`);
+  const salV = v.type === "sal" ? salAv(v.id) : null;
+  const alt = R.alle.filter(x => x.type !== "avstaa");
+  const hoyest = alt.reduce((a, b) => (b.nv > a.nv ? b : a), alt[0]); // det regel 3 velger: høyest verdi uansett ramme
+  const avstaar = v.type === "avstaa";
+
+  /* 1 Anbefalingen med vilkår */
+  const vilkaar = [];
+  const spor = [];
+  let tittel, under;
+  if (avstaar) {
+    tittel = "Ikke signer på disse vilkårene";
+    under = alt.every(x => x.nv <= 0) ? "Alle salene gir tap med forutsetningene nå. Det som kan snu det:"
+      : `Ingen av salene holder rammen på ${kr(ramme)} både med salget nå og hvis salget blir 20 % lavere. Det som kan snu det:`;
+    if (R.snu.ramme?.status === "grense") vilkaar.push(`Skaff ${kr(R.snu.ramme.verdi)} i startfinansiering. Da holder ${navnMedKort(R.snu.ramme.til)} rammen også om salget blir 20 % lavere.`);
+    vilkaar.push("Be Rigg & Ro om en lavere pakkepris før dere signerer.");
+    vilkaar.push("Be utleierne om å flytte leie til senere i sesongen, eller om leie som følger salget.");
+  } else {
+    tittel = v.type === "egen" ? "Velg egen plan" : `Velg ${navnMedKort(v)}`;
+    under = "men signer først når tre ting er på plass:";
+    vilkaar.push(ramme == null
+      ? `Startfinansieringen er avklart. Dere har ikke satt noen ramme, og ${v.navn} trenger ${kr(v.behov)} underveis, ${kr(v.behovLav)} hvis salget blir 20 % lavere.`
+      : `Startfinansieringen på ${kr(ramme)} er bekreftet, gjerne med en buffer. ${v.navn} trenger ${kr(v.behov)} med salget nå og ${kr(v.behovLav)} hvis salget blir 20 % lavere.`);
+    const pl = R.grense?.pakkeLav;
+    vilkaar.push(pl?.status === "grense"
+      ? `Rigg & Ro bekrefter pakkeprisen på ${kr(s.pakke)} per konsert. Hvis salget blir 20 % lavere, holder ${v.navn} rammen bare så lenge pakken koster under ${kr(pl.verdi)}.`
+      : `Rigg & Ro bekrefter pakkeprisen på ${kr(s.pakke)} per konsert.`);
+    if (v.type === "egen") vilkaar.push("Utleierne godtar enkeltkonserter. Casen sier at avtalene gjelder hele programmet, så det må avtales før signering.");
+    else vilkaar.push(`${v.navn} bekrefter at ${tall(kapasitet(salV, "staa") ?? kapasitet(salV, "sitte"))} plasser er salgbare i oppsettet dere skal bruke.`);
+  }
+  if (ramme != null && hoyest && hoyest.id !== v.id && hoyest.type === "sal" && !hoyest.holderNaa && hoyest.leieFoerStart > 0)
+    spor.push(`${hoyest.navn}: kan noe av de ${kr(hoyest.leieFoerStart)} i leie som forfaller før januar, betales senere? ${hoyest.navn} gir mest, men trenger ${kr(hoyest.behov - ramme)} mer enn rammen.`);
+  if (!barTilSceneskift(s) && salV) spor.push(`${salV.navn}: får Sceneskift en del av barsalget? Casen regner ingen barinntekt (se nederst).`);
+
+  const kildeLenke = salV?.kilde ? h("div", { class: "kilde" }, "Bilde: ", h("a", { href: salV.kilde, target: "_blank", rel: "noopener" }, salV.kilde.replace(/^https?:\/\//, ""))) : null;
+  main.append(h("section", { class: "seksjon anbefaling", style: `--c: var(--${v.farge ?? "graa"})` },
+    h("div", { class: "anb-tekst" },
+      h("p", { class: "anb-over" }, "Vårt råd til Maja"),
+      h("h2", { class: "anb-tittel" }, tittel, v.type === "egen" ? h("span", { class: "merke varsel" }, "utenfor casen") : null),
+      h("p", { class: "anb-under" }, under),
+      h("ol", { class: "vilkaar" }, ...vilkaar.map(t => h("li", {}, t))),
+      avstaar ? h("p", { class: "anb-ellers" }, "Å avstå koster ingenting nå, fordi planleggingen er betalt uansett.")
+              : h("p", { class: "anb-ellers" }, "Blir de ikke oppfylt, bør du forsøke å reforhandle før du signerer, eller avstå. Å avstå koster ingenting nå, fordi planleggingen er betalt uansett."),
+      spor.length ? h("div", { class: "anb-spor" }, h("h3", {}, "Verdt å spørre om"), h("ul", {}, ...spor.map(t => h("li", {}, t)))) : null),
+    salV?.bilde ? h("div", { class: "anb-bilde" }, h("img", { src: salV.bilde, alt: `Bilde av ${salV.navn}` }), kildeLenke) : null));
+
+  const varsler = [utvidelserMerknad(), lokaleeffektMerknad(),
+    res.blandet ? h("p", { class: "varsel", style: "margin-top: 12px" }, h("span", { class: "merke varsel" }, "utenfor casen"), " Programmet blander saler. Casen sier at avtalene gjelder hele programmet, så egen plan er et forslag Maja kan ta opp, ikke et tilbud som finnes.") : null].filter(Boolean);
+  main.append(h("div", { class: "gjelder" },
+    h("p", { class: "naa-linje svak" }, "Gjelder ", h("b", {}, sc ? sc.navn.toLowerCase() : "egne verdier"), ": ",
+      h("b", { class: "tall" }, `${pst(faktor)} av salget i 2026`), " og ", h("b", { class: "tall" }, `${kr(s.pakke)} per konsert`), ". ",
+      h("button", { type: "button", class: "stille liten", onclick: () => gaaTil("resultater") }, "Endre under Resultater")),
+    h("p", { class: "naa-linje svak liten" }, `Regelen bak rådet, som i notatet: høyest verdi blant valgene som holder rammen både med salget nå og hvis salget blir 20 % lavere. Salget kan ikke rettes opp etter signering. Pakkeprisen kjenner Maja før hun signerer, derfor er den et vilkår.`),
+    ...varsler));
+
+  /* 2 Hvorfor: ett kort per valg */
+  const kortFor = x => {
+    const sal = x.type === "sal" ? salAv(x.id) : null;
+    const linjer = [];
+    if (ramme != null) {
+      if (!x.holderNaa) linjer.push(h("span", { class: "minus" }, `Trenger ${kr(x.behov - ramme)} mer enn rammen.`));
+      else if (!x.holderLav) linjer.push(`Holder rammen nå, men ikke hvis salget blir 20 % lavere (trenger da ${kr(x.behovLav)}).`);
+      else linjer.push(h("span", { class: "pluss" }, "Holder rammen, også hvis salget blir 20 % lavere."));
+    }
+    if (x.leieFoerStart > 0) linjer.push(`${kr(x.leieFoerStart)} i leie forfaller før første konsert.`);
+    if (x.fulleKonserter) linjer.push(`Full på ${x.fulleKonserter} ${x.fulleKonserter === 1 ? "konsert" : "konserter"}, ${tall(x.tapteBilletter)} billetter går tapt.`);
+    if (x.nvLav < 0) linjer.push(`Taper penger hvis salget blir 20 % lavere.`);
+    const over = ramme != null && x.behov > ramme;
+    return h("div", { class: `kort raad-kort${x.id === v.id ? " valgt" : ""}`, style: `--c: var(--${x.farge ?? "graa"})` },
+      h("h3", {}, sal ? mini(sal) : null, sal ? salTittel(sal) : x.navn,
+        x.type === "egen" ? h("span", { class: "merke varsel" }, "utenfor casen") : null,
+        x.id === v.id ? h("span", { class: "merke raad-merke" }, "vårt råd") : null),
+      sal ? h("p", { class: "liten svak leietype" }, leieType(sal)) : null,
+      h("div", { class: `stor ${x.nv < 0 ? "minus" : ""}` }, kr(x.nv)),
+      h("div", { class: "stor-etikett" }, "verdi for Sceneskift"),
+      h("dl", {},
+        h("dt", {}, "Må ha klart"), h("dd", { class: over ? "minus" : "" }, kr(x.behov)),
+        h("dt", {}, "Verdi om salget blir 20 % lavere"), h("dd", { class: x.nvLav < 0 ? "minus" : "" }, kr(x.nvLav))),
+      h("div", { class: "kort-linjer liten" }, ...linjer.map(l => h("div", {}, l))));
+  };
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, avstaar ? "Hvorfor ingen av salene" : `Hvorfor ${v.type === "sal" ? v.navn : "egen plan"}`),
+    h("p", { class: "ingress" }, "Verdien er hva sesongen er verdt for Sceneskift, regnet i dagens kroner. «Må ha klart» er det laveste kontoen kommer i løpet av våren, altså startfinansieringen dere trenger. Begge er forklart under."),
+    h("div", { class: "kort-rad raad-kort-rad" }, ...alt.map(kortFor),
+      h("div", { class: `kort raad-kort avstaa-kort${avstaar ? " valgt" : ""}`, style: "--c: var(--graa)" },
+        h("h3", {}, "Avstå", avstaar ? h("span", { class: "merke raad-merke" }, "vårt råd") : null),
+        h("div", { class: "stor" }, kr(0)),
+        h("div", { class: "stor-etikett" }, "ingen risiko, ingen konserter"),
+        h("p", { class: "liten svak" }, "Planleggingen er betalt uansett, så den teller ikke med i noen av valgene.")))));
+
+  /* 3 To tall, forklart uten fagord */
+  // Ved avstå forklares tallene med den som gir mest av dem som holder rammen nå, ellers den som gir mest
+  const x = avstaar ? (alt.filter(a => a.holderNaa).reduce((a, b) => (!a || b.nv > a.nv ? b : a), null) ?? hoyest) : v;
+  if (x) {
+    const T = (x.saldo?.length ?? 1) - 1;
+    const forklarKort = (tittel, stort, etikett, fagord, ...tekst) => h("div", { class: "forklar-kort" },
+      h("h3", {}, tittel), h("div", { class: `stor tall ${stort < 0 ? "minus" : ""}` }, kr(stort)), h("div", { class: "stor-etikett" }, etikett),
+      ...tekst.map(t => h("p", {}, t)), h("p", { class: "liten svak" }, fagord));
+    const figur = svg("Kontoen ved slutten av hver måned");
+    const serier = [{ navn: x.kort ?? x.navn, farge: x.farge ?? "graa", verdier: x.saldo ?? [], bred: true }];
+    const annen = hoyest && hoyest.id !== x.id && hoyest.saldo ? hoyest : null;
+    if (annen) serier.push({ navn: annen.kort ?? annen.navn, farge: annen.farge ?? "graa", verdier: annen.saldo });
+    main.append(h("section", { class: "seksjon" },
+      h("h2", {}, "To tall, forklart uten fagord"),
+      h("div", { class: "forklar-rad" },
+        forklarKort("Hva sesongen er verdt", x.nv, `${x.navn}, i dagens kroner`, "I Resultater og arbeidsboka heter dette nåverdi.",
+          `Alt som kommer inn minus alt som går ut, fra nå til det siste oppgjøret ${mnd(T)}. For ${x.navn} er det ${kr(x.netto)} mer inn enn ut.`,
+          `En krone som kommer i juli er litt mindre verdt enn en krone i dag, fordi kronen i dag kunne stått i banken og gitt ${pst(s.rente ?? 0)} i året. Regnet om til dagens kroner er sesongen verdt ${kr(x.nv)}.`,
+          "Er tallet under null, taper Sceneskift penger på sesongen. Da er det bedre å la være."),
+        forklarKort("Hvor mye dere må ha klart", x.behov, `${x.navn}, det laveste kontoen kommer`, "I Resultater og arbeidsboka heter dette finansieringsbehov.",
+          "Dere betaler før billettpengene kommer. Halve pakken går ut måneden før konserten, mens billettselskapet betaler måneden etter. Derfor går kontoen i minus i starten av våren.",
+          `Det laveste punktet er det dere må ha klart: ${kr(x.behov)} ${mnd(x.bunnTid)}.${ramme != null ? ` Rammen er ${kr(ramme)}.` : ""}`,
+          "Tallene gjelder ved slutten av hver måned. Inne i måneden kan kontoen ligge lavere, så ha en buffer.")),
+      h("div", { class: "figur raad-figur" }, h("h3", {}, "Kontoen ved slutten av hver måned"),
+        h("div", { class: "forklaring" }, ...serier.map(sr => h("span", { style: `--c: var(--${sr.farge})` }, sr.navn === x.kort ? `${x.navn}` : `${annen.navn}, gir mest`))),
+        figur)));
+    tegnSaldo(figur, serier, (x.saldo ?? []).map((_, t) => MAANEDER[t] ?? `M${t}`), ramme);
+  }
+
+  /* 4 Når snur rådet */
+  if (!avstaar && R.grense) {
+    const g = R.grense;
+    const sumSalg = d.program.reduce((a, k) => a + (k.forventetSalg ?? 0), 0);
+    const snuKort = (stort, tittel, tekst, minus) => h("div", { class: "kort snu-kort", style: `--c: var(--${v.farge ?? "graa"})` },
+      h("h3", {}, tittel), h("div", { class: `stor ${minus ? "minus" : ""}` }, stort), h("p", { class: "liten" }, tekst));
+    const kortene = [];
+    const nvg = g.nvNegativUnder;
+    if (nvg.status === "grense") kortene.push(snuKort(pst1(nvg.verdi), "Salget der sesongen gir tap",
+      nvg.billetter >= 0 ? `Selger dere mindre enn dette av salget i 2026, taper ${v.navn} penger. Det er ${tall(nvg.billetter)} færre billetter enn ${faktor === 1 ? "i 2026" : "nå"}, over hele våren.`
+                         : `Salget nå er allerede under grensen. ${v.navn} taper penger.`, nvg.billetter < 0));
+    const rg = g.overRammenUnder;
+    if (ramme != null && rg.status === "grense") kortene.push(snuKort(pst1(rg.verdi), "Salget der pengene ikke strekker til",
+      `Under dette trenger ${v.navn} mer enn ${kr(ramme)}. Det er ${tall(Math.max(0, rg.billetter))} færre billetter enn ${faktor === 1 ? "i 2026" : "nå"}.`));
+    const pl = g.pakkeLav;
+    if (pl?.status === "grense") kortene.push(snuKort(kr(pl.verdi), "Pakkeprisen der rammen ryker",
+      `Hvis salget blir 20 % lavere, holder ${v.navn} rammen bare med pakke under dette.${g.pakkeOverRammen.status === "grense" ? ` Med salget nå er grensen ${kr(g.pakkeOverRammen.verdi)}.` : ""}`, pl.verdi < s.pakke));
+    if (R.snu.ramme?.status === "grense") kortene.push(snuKort(kr(R.snu.ramme.verdi), "Startfinansieringen som gir et annet råd",
+      `Kan dere skaffe så mye, blir ${navnMedKort(R.snu.ramme.til)} rådet. Den gir mer, og holder da rammen også om salget blir 20 % lavere.`));
+    main.append(h("section", { class: "seksjon" },
+      h("h2", {}, "Når snur rådet"),
+      h("p", { class: "ingress" }, `Det er salget og pakkeprisen som avgjør. Grensene under gjelder ${v.navn}, med de andre forutsetningene som nå. Salget er målt mot salget i 2026, konsert for konsert.`),
+      h("div", { class: "kort-rad" }, ...kortene),
+      h("p", { style: "margin-top: 12px" }, h("button", { type: "button", class: "stille", onclick: () => gaaTil("resultater") }, "Grensene for alle salene og alle scenarioene står i Resultater"))));
+  }
+
+  /* 5 Artisten bestemmer salen (praksisvinkelen) */
+  const bb = besteBlanding(s, d.saler, d.program);
+  const lokaler = [...new Set(d.program.map(k => k.i2026?.lokale).filter(Boolean))];
+  let i2026 = "";
+  if (lokaler.length === 2) {
+    const [l1, l2] = lokaler.map(l => ({ navn: l, ks: d.program.filter(k => k.i2026?.lokale === l && k.salg2026 != null) }));
+    const maks = l => Math.max(...l.ks.map(k => k.salg2026)), min = l => Math.min(...l.ks.map(k => k.salg2026));
+    const [liten, stor] = maks(l1) < min(l2) ? [l1, l2] : maks(l2) < min(l1) ? [l2, l1] : [null, null];
+    const ord = n => ["null", "én", "to", "tre", "fire", "fem", "seks", "sju", "åtte", "ni", "ti", "elleve", "tolv"][n] ?? String(n);
+    if (liten) i2026 = ` I 2026 gikk de ${ord(liten.ks.length)} minste konsertene i ${liten.navn} og de ${ord(stor.ks.length)} største i ${stor.navn}.`;
+  }
+  const artistSek = h("section", { class: "seksjon" },
+    h("h2", {}, "Artisten bestemmer salen"),
+    h("p", { class: "ingress" }, `I casen går alle konsertene i samme sal, og Maja regner med samme salg som i fjor uansett sal. I praksis er det artisten dere booker, og hva dere booker dem til, som avgjør hvor mange som kjøper billett. En solist på en sittende låtskriverkveld og et band på en stående klubbkveld trenger ikke samme rom. Salget avgjør så hvilken sal som lønner seg.${i2026}`));
+  if (bb) {
+    const ref = v.type === "sal" ? v : alt.filter(a => a.type === "sal" && a.holderNaa).reduce((a, b) => (!a || b.nv > a.nv ? b : a), null);
+    const perSal = [...new Set(bb.valg.map(x => x.salId))].map(id => ({ sal: salAv(id), ks: d.program.filter((k, i) => bb.valg[i].salId === id) }));
+    // Når fast leie per konsert slår leie som følger salget: der leien i den ene salen blir lik den faste i den andre
+    let skille = null;
+    const fastSal = perSal.map(p => p.sal).find(sl => sl?.leie?.length === 1 && sl.leie[0].type === "perKonsert");
+    const andelSal = perSal.map(p => p.sal).find(sl => sl?.leie?.length === 1 && sl.leie[0].type === "andel");
+    if (fastSal && andelSal) {
+      const F = fastSal.leie[0].belop, a = andelSal.leie[0], netto = s.billettpris - s.gebyr;
+      if ((a.minimum ?? 0) < F && a.andel > 0) skille = `Fast leie i ${fastSal.navn} (${kr(F)}) er billigere enn ${pst(a.andel)} av oppgjøret i ${andelSal.navn} når en konsert selger mer enn ${tall(Math.floor(F / (a.andel * netto)))} billetter. Men ${fastSal.navn} har bare ${tall(Math.max(kapasitet(fastSal, "staa") ?? 0, kapasitet(fastSal, "sitte") ?? 0))} plasser, så den passer for konsertene i midten.`;
+    }
+    const liste = a => (a.length > 1 ? `${a.slice(0, -1).join(", ")} og ${a[a.length - 1]}` : a.join(""));
+    artistSek.append(
+      h("div", { class: "blanding" }, ...d.program.map((k, i) => { const sl = salAv(bb.valg[i].salId); return h("div", { class: "blanding-konsert", style: `--c: var(--${fargeFor(sl)})`, title: `${k.artist}: ${tall((k.forventetSalg ?? 0) * faktor)} forventet` },
+        h("span", { class: "blanding-nr" }, String(k.nr)), h("span", { class: "blanding-sal" }, sl?.kort ?? sl?.navn), h("span", { class: "blanding-artist" }, k.artist),
+        h("span", { class: "blanding-salg tall" }, `${tall((k.forventetSalg ?? 0) * faktor)} solgt`)); })),
+      h("p", { class: "blanding-tekst" }, ...perSal.map((p, j) => [j ? " " : "", h("b", {}, p.sal?.navn), ` passer best for konsert ${liste(p.ks.map(k => k.nr))}.`]), skille ? ` ${skille}` : ""),
+      h("p", { class: "blanding-tekst" }, `Den beste blandingen gir `, h("b", { class: "tall" }, kr(bb.nv)), ` i verdi og trenger `, h("b", { class: "tall" }, kr(bb.behov)),
+        ref ? [`, mot `, h("b", { class: "tall" }, kr(ref.nv)), ` og `, h("b", { class: "tall" }, kr(ref.behov)), ` for alt i ${ref.navn}.`] : ".",
+        bb.holderRammen ? "" : " Den holder ikke rammen."),
+      h("p", { class: "varsel", style: "margin-top: 12px" }, h("span", { class: "merke varsel" }, "utenfor casen"), " Det krever at utleierne godtar enkeltkonserter. Casen sier at avtalene gjelder hele programmet, så dette er noe Maja kan spørre om, ikke et tilbud som finnes. Programmet viser forslaget per konsert, og knappen «Beste blanding» legger det inn."));
+  }
+  main.append(artistSek);
+
+  /* 6 Der vi går utenfor casen */
+  const tallInput = (felt, opt = {}) => h("input", { type: "number", min: 0, step: opt.step ?? 10, value: opt.pst ? Math.round((s[felt] ?? 0) * 1000) / 10 : (s[felt] ?? 0), "aria-label": opt.navn,
+    onchange: e => { const verdi = Math.max(0, Number(e.target.value) || 0); s[felt] = opt.pst ? verdi / 100 : verdi; oppdater(); } });
+  const nullKnapp = (...felt) => (felt.some(f => s[f]) ? h("button", { type: "button", class: "stille liten", onclick: () => { for (const f of felt) s[f] = 0; oppdater(); } }, "tilbake til 0") : null);
+  const merkeHvis = b => (b ? h("span", { class: "merke varsel" }, "utenfor casen") : null);
+  const rader = [];
+  // Bar
+  const barTekst = [];
+  if (!avstaar) barTekst.push(`Hver 10 kr per gjest til Sceneskift gir ${v.navn} ${kr(R.barPer10)} mer i verdi.`);
+  if (R.snu.bar.status === "grense") barTekst.push(`Fra ${kr(R.snu.bar.verdi)} mer per gjest blir ${navnMedKort(R.snu.bar.til)} rådet.`);
+  else {
+    barTekst.push("Ingen barinntekt snur rådet.");
+    if (hoyest && hoyest.id !== v.id && ramme != null && hoyest.saldo && -hoyest.saldo[1] > ramme) barTekst.push(`${hoyest.navn} er over rammen allerede i januar, før det første oppgjøret kommer.`);
+  }
+  rader.push(["Barinntekt", `${kr(0)}`, h("div", { class: "utenfor-felt" },
+    h("label", {}, tallInput("barPerGjest", { navn: "Bar: omsetning per gjest" }), " kr per gjest"),
+    h("label", {}, tallInput("barAndel", { navn: "Bar: Sceneskifts andel", pst: true, step: 5 }), " % til Sceneskift"),
+    merkeHvis(barTilSceneskift(s)), nullKnapp("barPerGjest", "barAndel")), barTekst.join(" ")]);
+  // Uforutsett
+  const u = R.snu.uforutsett;
+  rader.push(["Uforutsette kostnader", `${kr(0)}`, h("div", { class: "utenfor-felt" },
+    h("label", {}, tallInput("uforutsett", { navn: "Uforutsette kostnader per konsert", step: 500 }), " kr per konsert"), merkeHvis(s.uforutsett), nullKnapp("uforutsett")),
+    `Rigg & Ro bærer det pakken dekker. Dette er det som faller utenfor, for eksempel skade eller ekstra vakthold.${u.status === "grense" ? ` ${avstaar ? "Rådet" : v.navn} tåler ${kr(Math.floor(u.verdi))} mer per konsert før rådet blir ${navnMedKort(u.til)}.` : ""}`]);
+  // Pakke per konsert
+  const medAvvik = d.program.filter(k => k.pakkeAvvik).length;
+  rader.push(["Pakkepris per konsert", `${kr(s.pakke)} på alle`, h("div", { class: "utenfor-felt" }, medAvvik ? [`${medAvvik} ${medAvvik === 1 ? "konsert har" : "konserter har"} egen pris `, merkeHvis(true)] : "Lik på alle",
+    h("button", { type: "button", class: "stille liten", onclick: () => gaaTil("program") }, "endre i Programmet")),
+    "Artisthonoraret varierer i virkeligheten. Et større navn koster mer og selger mer, og kan flytte konserten til en annen sal."]);
+  // Blanding
+  rader.push(["Sal per konsert", "Én sal for hele programmet", h("div", { class: "utenfor-felt" }, res.blandet ? [`Egen plan blander ${res.egen.salerIBruk.map(id => salAv(id)?.kort ?? id).join(" og ")} `, merkeHvis(true)] : "Én sal"),
+    bb ? `Beste blanding gir ${kr(bb.nv)} i verdi. Krever at utleierne godtar enkeltkonserter.` : ""]);
+  // Lokaleeffekt
+  const endretLokal = d.saler.filter(sl => (sl.lokaleeffekt ?? 1) !== 1);
+  const mot = v.type === "sal" ? alt.filter(a => a.type === "sal" && a.id !== v.id && a.holderNaa).reduce((a, b) => (!a || b.nv > a.nv ? b : a), null) : null;
+  const lg = mot ? lokaleeffektGrense(s, d.saler, d.program, v.id, mot.id) : null;
+  rader.push(["Lokalet påvirker salget", "100 %, Majas premiss", h("div", { class: "utenfor-felt" }, endretLokal.length ? [endretLokal.map(sl => `${sl.kort ?? sl.navn} ${pst(sl.lokaleeffekt)}`).join(", "), " ", merkeHvis(true)] : "100 % i alle",
+    h("button", { type: "button", class: "stille liten", onclick: () => gaaTil("saler") }, "endre under Saler")),
+    lg?.status === "grense" ? `Et kjent eller stort lokale kan selge bedre. ${v.navn} er bedre enn ${mot.navn} så lenge den får minst ${pst1(lg.verdi)} av publikummet, når ${mot.navn} får alt.` : "Et kjent eller stort lokale kan selge bedre. Gruppas følsomhet, ikke en del av casen."]);
+  // Sitteplasser
+  const antatt = d.saler.filter(sl => sl.sitteAntatt && kapasitet(sl, "sitte") !== null);
+  if (antatt.length) rader.push(["Sitteplasser", "Ikke oppgitt i tilbudene", h("div", { class: "utenfor-felt" }, `${antatt.map(sl => `${sl.kort ?? sl.navn} ${kapasitet(sl, "sitte")}`).join(", ")}, antatt`),
+    "Betyr bare noe for konserter som settes sittende i Programmet."]);
+  // Lån over rammen
+  if (ramme != null && hoyest && !hoyest.holderNaa && hoyest.type === "sal") {
+    const rh = res.altI[hoyest.id];
+    rader.push(["Lån ut over rammen", "Holdes utenfor", h("div", { class: "utenfor-felt" }, `${pst(s.laanRente ?? 0)} rente per år, vår antakelse`),
+      `${hoyest.navn} kan gjennomføres med et lån på ${kr(rh.laan)} i ${rh.maanederMedLaan} ${rh.maanederMedLaan === 1 ? "måned" : "måneder"}, ca. ${kr(rh.rentekostnad)} i rente. Lånet gjør ${hoyest.kort ?? hoyest.navn} mulig, ikke tryggere: om salget blir 20 % lavere, må det bli ${kr(Math.max(0, hoyest.behovLav - ramme))}.`]);
+  }
+  // Inne i måneden
+  rader.push(["Når i måneden pengene går", "Ved månedsslutt", h("div", { class: "utenfor-felt" }, "Ved månedsslutt"),
+    "Rigg & Ro vil ha første halvdel den 1. i måneden før konserten, og Flytbillett betaler innen den 20. i måneden etter. Inne i måneden kan kontoen ligge lavere enn tallene her. Derfor rådet om buffer."]);
+
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, "Der vi går utenfor casen"),
+    h("p", { class: "ingress" }, "Oppgaveteksten sier: «Utover postene i tabellen og lokaleleien er det ingen andre inntekter eller kostnader.» I virkeligheten er det sjelden slik, og å utelate noe er å anta at det er null. Derfor står tilleggene på null, så tallene over er casens, og vi viser hva som skjer om de ikke er det."),
+    h("div", { class: "tabellramme" }, h("table", { class: "utenfor" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Tillegg"), h("th", {}, "I casen"), h("th", {}, "Hos oss nå"), h("th", {}, "Hva det gjør med rådet"))),
+      h("tbody", {}, ...rader.map(([t, c, n, e]) => h("tr", {}, h("td", { class: "utenfor-navn" }, t), h("td", { class: "svak" }, c), h("td", {}, n), h("td", { class: "liten" }, e))))))));
+}
+
 /* ---------- Program ---------- */
 // Merknaden etter «Beste blanding» gjelder så lenge programmet er som da knappen ble trykket
 const blandingNokkel = () => JSON.stringify(state.data.program.map(k => [k.salId, k.oppsett, k.forventetSalg]));
@@ -207,13 +482,13 @@ function renderProgram(main, res) {
 
   const hode = h("tr", {},
     h("th", {}, "Nr"), h("th", {}, "Dato"), h("th", {}, "Artist"), h("th", {}, "Sjanger"), h("th", { class: "hoyre" }, "Forventet salg"),
-    h("th", {}, "Oppsett"), h("th", {}, "Sal"), h("th", {}, "Forslag"), h("th", { class: "hoyre" }, "Billetter"), h("th", { class: "hoyre" }, "Leie"), h("th", { class: "hoyre" }, "Bidrag"), h("th", {}));
+    h("th", {}, "Oppsett"), h("th", {}, "Sal"), h("th", {}, "Forslag"), h("th", { class: "hoyre" }, "Pakke"), h("th", { class: "hoyre" }, "Billetter"), h("th", { class: "hoyre" }, "Leie"), h("th", { class: "hoyre" }, "Bidrag"), h("th", {}));
   const rader = d.program.map((k, i) => radForKonsert(k, i, res.egen.perKonsert[i], perKonsert));
   const sumBidrag = res.egen.perKonsert.reduce((a, k) => a + k.bidrag, 0);
   const fot = h("tfoot", {},
-    h("tr", {}, h("td", { colspan: 8 }, "Sum bidrag fra konsertene"), h("td", { class: "hoyre tall" }, tall(res.egen.perKonsert.reduce((a, k) => a + k.n, 0))), h("td", { class: "hoyre tall" }, kr(res.egen.perKonsert.reduce((a, k) => a + k.leie, 0))), h("td", { class: `hoyre tall ${sumBidrag < 0 ? "minus" : ""}` }, kr(sumBidrag)), h("td")),
-    res.egen.fastLeie ? h("tr", {}, h("td", { colspan: 10 }, `Faste leiebetalinger for sesongen (${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(", ")})`), h("td", { class: "hoyre tall minus" }, kr(-res.egen.fastLeie)), h("td")) : null,
-    h("tr", {}, h("td", { colspan: 10 }, "Samlet netto for sesongen, udiskontert"), h("td", { class: `hoyre tall ${res.egen.netto < 0 ? "minus" : ""}` }, kr(res.egen.netto)), h("td")));
+    h("tr", {}, h("td", { colspan: 9 }, "Sum bidrag fra konsertene"), h("td", { class: "hoyre tall" }, tall(res.egen.perKonsert.reduce((a, k) => a + k.n, 0))), h("td", { class: "hoyre tall" }, kr(res.egen.perKonsert.reduce((a, k) => a + k.leie, 0))), h("td", { class: `hoyre tall ${sumBidrag < 0 ? "minus" : ""}` }, kr(sumBidrag)), h("td")),
+    res.egen.fastLeie ? h("tr", {}, h("td", { colspan: 11 }, `Faste leiebetalinger for sesongen (${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(", ")})`), h("td", { class: "hoyre tall minus" }, kr(-res.egen.fastLeie)), h("td")) : null,
+    h("tr", {}, h("td", { colspan: 11 }, "Samlet netto for sesongen, udiskontert"), h("td", { class: `hoyre tall ${res.egen.netto < 0 ? "minus" : ""}` }, kr(res.egen.netto)), h("td")));
   sek.append(h("div", { class: "tabellramme" }, h("table", { class: "program" }, h("thead", {}, hode), h("tbody", {}, rader.flat()), fot)));
 
   const kappet = res.egen.perKonsert.filter(k => k.kappet);
@@ -230,9 +505,10 @@ function radForKonsert(k, i, r, perKonsert) {
   const oppsettKnapp = (o, tekst) => h("button", { type: "button", "aria-pressed": String(k.oppsett === o), disabled: sal && kapasitet(sal, o) === null, title: sal && kapasitet(sal, o) === null ? `${sal.navn} har ikke ${tekst.toLowerCase()} oppsett` : `${tekst}: ${kapasitet(sal, o) ?? "?"} plasser`, onclick: () => endre("oppsett", o) }, tekst);
   const avvik = k.salg2026 != null && k.forventetSalg !== k.salg2026;
   const fSal = f ? salAv(f.salId) : null;
-  const forklaringsrad = fork("tr", "forklaringsrad", h("td", { colspan: 12 },
+  const forklaringsrad = fork("tr", "forklaringsrad", h("td", { colspan: 13 },
     k.i2026 ? h("span", {}, `I 2026: ${k.i2026.navn} i ${k.i2026.lokale} (${k.i2026.kapasitet} plasser i alt), ${tall(k.salg2026)} betalte billetter. `) : null,
-    f ? h("span", {}, `Forslag: ${f.hvorfor}`) : null));
+    f ? h("span", {}, `Forslag: ${f.hvorfor}`) : null,
+    k.pakkeAvvik ? h("span", {}, `Pakken er ${kr(Math.abs(k.pakkeAvvik))} ${k.pakkeAvvik > 0 ? "dyrere" : "billigere"} enn for resten av sesongen (utenfor casen).`) : null));
   return [h("tr", {},
     h("td", { class: "nr" }, String(k.nr)),
     h("td", { class: "dato" }, h("input", { type: "text", value: k.dato ?? "", size: 5, "aria-label": "Dato", onchange: e => endre("dato", e.target.value) })),
@@ -252,6 +528,10 @@ function radForKonsert(k, i, r, perKonsert) {
         forslagLik ? h("span", { class: "som-valgt", title: f.hvorfor }, "Som valgt")
                    : h("button", { type: "button", class: "forslag-knapp", title: f.hvorfor, onclick: () => { k.salId = f.salId; k.oppsett = f.oppsett; oppdater(); } }, `${fSal?.kort ?? fSal?.navn} ${f.oppsett === "sitte" ? "sittende" : "stående"}`),
       ] : h("span", { class: "som-valgt" }, "Ingen sal passer")),
+    h("td", { class: "hoyre pakke" },
+      h("input", { type: "number", min: 0, step: 1000, value: pakkeFor(d.sesong, k), "aria-label": "Pakkepris for konserten", title: "Pakken for denne konserten. I casen er den lik for alle (utenfor casen hvis den endres)",
+                   onchange: e => endre("pakkeAvvik", Math.max(0, Number(e.target.value) || 0) - (d.sesong.pakke ?? 0)) }),
+      k.pakkeAvvik ? h("div", { class: "liten" }, h("span", { class: "merke varsel" }, "utenfor casen"), " ", h("button", { type: "button", class: "stille liten", onclick: () => endre("pakkeAvvik", 0) }, "som resten")) : null),
     h("td", { class: "hoyre tall" }, tall(r.n), r.kappet ? h("div", {}, h("span", { class: "merke varsel" }, "fullt")) : null),
     h("td", { class: "hoyre tall leie" }, kr(r.leie), r.leieDeler?.some(x => x.minimumSlaarInn) ? h("div", {}, h("span", { class: "merke" }, "minimum")) : null),
     h("td", { class: `hoyre tall bidrag ${r.bidrag < 0 ? "minus" : ""}` }, kr(r.bidrag)),
@@ -388,7 +668,7 @@ function fyllResultater(innhold, res) {
   innhold.append(h("section", { class: "seksjon" },
     fork("p", "ingress", "Stripa øverst viser nåverdi med 4 % realrente per år, og det største beløpet Sceneskift ligger ute med underveis, målt ved månedsslutt. Avstå gir null i begge. Ligger behovet over rammen, vises lånet som trengs (det saldoen ligger under rammen, som en kassekreditt) og renten på det. Renten holdes utenfor nåverdien, slik casen krever, og vises som egen linje."),
     res.blandet ? h("p", { class: "varsel" }, `Egen plan bruker ${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(" og ")}. Casen sier at avtalene gjelder hele programmet, så en blanding krever at utleierne godtar enkeltkonserter. Vis det som et alternativ Maja kan ta opp før signering, ikke som et tilbud som finnes.`) : null,
-    lokaleeffektMerknad()));
+    lokaleeffektMerknad(), utvidelserMerknad()));
 
   innhold.append(konsekvenstabell(res));
 
@@ -419,7 +699,9 @@ function fyllResultater(innhold, res) {
     fork("p", "ingress", "Start er like før første konsertmåned og diskonteres ikke. Billettoppgjøret kommer måneden etter konserten, leie etter salens vilkår. Følg et tall herfra til stripa øverst."),
     h("div", { class: "tabellramme" }, h("table", { class: "kontantstrom" },
       h("thead", {}, h("tr", {}, h("th", {}, "Kroner"), ...etiketter.map(e => h("th", { class: "hoyre" }, e)))),
-      h("tbody", {}, rad("Billettoppgjør", L.billetter), rad("Publikumsutgift", L.utgift), rad("Pakke", L.pakke), rad("Leie", L.leie), rad("Sum i måneden", res.egen.cf), rad("Saldo", res.egen.saldo, "saldo"),
+      h("tbody", {}, rad("Billettoppgjør", L.billetter), rad("Publikumsutgift", L.utgift), rad("Pakke", L.pakke), rad("Leie", L.leie),
+        ...(L.bar.some(Boolean) ? [rad("Bar, Sceneskifts andel", L.bar)] : []), ...(L.uforutsett.some(Boolean) ? [rad("Uforutsette kostnader", L.uforutsett)] : []),
+        rad("Sum i måneden", res.egen.cf), rad("Saldo", res.egen.saldo, "saldo"),
         ...(res.egen.laan > 0 ? [rad("Under rammen, lån", res.egen.trekk.map(x => -x)), rad("Rente på lånet", res.egen.renter.map(x => -x))] : []))))));
 }
 
@@ -429,6 +711,25 @@ function lokaleeffektMerknad() {
   if (!saler.length) return null;
   return h("p", { class: "varsel", style: "margin-top: 12px" }, h("span", { class: "merke varsel" }, "følsomhet"), " ",
     `Lokaleeffekt: ${saler.map(s => `${s.navn} ${pst(s.lokaleeffekt)}`).join(", ")}. Salget i ${saler.length === 1 ? "den salen" : "de salene"} regnes som den andelen av etterspørselen, og taket i salen gjelder fortsatt. Majas premiss er 100 %. Endres under Saler.`);
+}
+
+/** Merknad når en utvidelse utenfor casen (bar, uforutsett, pakke per konsert) er i bruk. */
+function utvidelserMerknad() {
+  const d = state.data;
+  const tekst = utvidelserTekst(d.sesong, d.program);
+  if (!tekst.length) return null;
+  return h("p", { class: "varsel", style: "margin-top: 12px" }, h("span", { class: "merke varsel" }, "utenfor casen"), " ",
+    `${tekst.join(". ")}. Casen har ingen andre inntekter eller kostnader enn pakken, leien og postene per billett. Settes tilbake under Rådet eller Forutsetninger.`);
+}
+
+function utvidelserTekst(s, program) {
+  const ut = [];
+  for (const u of utvidelserIBruk(s, program)) {
+    if (u === "bar") ut.push(`Bar: ${kr(s.barPerGjest)} per gjest, ${pst(s.barAndel)} til Sceneskift (${kr(barTilSceneskift(s))} per gjest)`);
+    if (u === "uforutsett") ut.push(`Uforutsette kostnader: ${kr(s.uforutsett)} per konsert`);
+    if (u === "pakkeAvvik") { const n = program.filter(k => k.pakkeAvvik).length; ut.push(`Egen pakkepris på ${n} ${n === 1 ? "konsert" : "konserter"}`); }
+  }
+  return ut;
 }
 
 /** Konsekvenstabellen fra oppgaveteksten: én rad per handling (også å avstå), én kolonne per scenario. Nåverdi og om rammen holder. */
@@ -595,16 +896,17 @@ function renderForutsetninger(main) {
   ];
   const boks = h("div", { class: "forutsetninger" },
     h("div", { class: "rad hode" }, h("span", {}, "Forutsetning"), h("span", { class: "hoyre" }, "Verdi"), h("span", {}, "Enhet"), fork("span", "", "Kilde"), h("span")));
-  for (const [felt, navn, enhet, kilde, o] of felter) {
+  const radFor = ([felt, navn, enhet, kilde, o]) => {
     const vis = v => o.pst ? Math.round(v * 1000) / 10 : v;
     const basis = SESONG_2027[felt];
-    boks.append(h("div", { class: "rad" },
-      h("label", { for: `f-${felt}` }, navn),
-      h("input", { id: `f-${felt}`, type: "number", step: o.step, value: vis(s[felt]), onchange: e => { const v = Number(e.target.value); s[felt] = o.pst ? v / 100 : v; oppdater(); } }),
+    return h("div", { class: "rad" },
+      h("label", { for: `f-${felt}` }, navn, o.merke ? h("span", { class: "merke varsel", style: "margin-left: 8px" }, o.merke) : null),
+      h("input", { id: `f-${felt}`, type: "number", step: o.step, min: o.min, value: vis(s[felt] ?? 0), onchange: e => { const v = Math.max(o.min ?? -Infinity, Number(e.target.value) || 0); s[felt] = o.pst ? v / 100 : v; oppdater(); } }),
       h("span", { class: "svak" }, enhet),
       fork("span", "liten svak", kilde),
-      s[felt] !== basis ? h("button", { type: "button", class: "stille liten", onclick: () => { s[felt] = basis; oppdater(); } }, `Tilbake til casen (${vis(basis)} ${enhet})`) : h("span", { class: "liten svak" }, "Som i casen")));
-  }
+      s[felt] !== basis ? h("button", { type: "button", class: "stille liten", onclick: () => { s[felt] = basis; oppdater(); } }, `Tilbake til casen (${vis(basis)} ${enhet})`) : h("span", { class: "liten svak" }, "Som i casen"));
+  };
+  for (const f of felter) boks.append(radFor(f));
   boks.append(h("div", { class: "rad" },
     h("label", { for: "f-konv" }, "Diskontering per måned"),
     h("select", { id: "f-konv", onchange: e => { s.konvensjon = e.target.value; oppdater(); } },
@@ -617,6 +919,16 @@ function renderForutsetninger(main) {
     fork("p", "ingress", "Tallene fra Majas e-post og vedleggene. Alt kan endres, og alt kan settes tilbake. Faste 2026-kroner, før skatt og finansiering."),
     boks,
     fork("p", "notat", "Det som ikke kan endres her: strukturen i betalingene. Billettoppgjøret kommer alltid måneden etter konserten, publikumsutgiften i konsertmåneden, og pakken i to deler. Det er slik casen er lagt opp, og slik arbeidsboka regner.")));
+  // Utvidelser utenfor casen: standard 0, som gir casens tall
+  const utenfor = [
+    ["barPerGjest", "Bar: omsetning per gjest", "kr", "Per betalt billett. Ikke i casen. Gjøres opp måneden etter, som billettene", { step: 10, min: 0, merke: "utenfor casen" }],
+    ["barAndel", "Bar: Sceneskifts andel", "%", "Andelen av baromsetningen Sceneskift får. Avtales med salen", { step: 5, min: 0, pst: true, merke: "utenfor casen" }],
+    ["uforutsett", "Uforutsette kostnader per konsert", "kr", "Det pakken ikke dekker, betalt i konsertmåneden. Casen: ingen andre kostnader", { step: 500, min: 0, merke: "utenfor casen" }],
+  ];
+  main.append(h("section", { class: "seksjon" },
+    h("h2", {}, "Utenfor casen"),
+    fork("p", "ingress", "Oppgaveteksten sier at det utover postene over og lokaleleien ikke er andre inntekter eller kostnader. Derfor står disse på 0, som gir casens tall. Pakkepris per konsert endres i Programmet. Rådet viser hva hver av dem gjør med rådet."),
+    h("div", { class: "forutsetninger" }, ...utenfor.map(radFor))));
 }
 
 document.addEventListener("DOMContentLoaded", init);
