@@ -1253,7 +1253,8 @@ const svg = (label) => { const e = document.createElementNS("http://www.w3.org/2
 /** Forklarende tekst som bare vises når bryteren «Forklaringer» er på. */
 const fork = (tag, cls, ...barn) => h(tag, { class: `${cls} forklaring-tekst` }, ...barn);
 
-const state = { data: null, fane: "raadet", referanse: "C", forklar: false, besteBlanding: null };
+const state = { data: null, fane: "raadet", referanse: "C", forklar: false, besteBlanding: null,
+                chat: { samtale: nySamtale(), logg: [], venter: false } };
 
 function salAv(id) { return state.data.saler.find(s => s.id === id); }
 function salerPerKonsert() { return state.data.saler.filter(s => !s.kunHelSesong); }
@@ -1356,7 +1357,7 @@ function render() {
   renderStripe(res);
   const main = document.getElementById("innhold");
   main.replaceChildren();
-  ({ raadet: renderRaadetFane, program: renderProgram, resultater: renderResultater, saler: renderSaler, forutsetninger: renderForutsetninger })[state.fane](main, res);
+  ({ raadet: renderRaadetFane, spor: renderSpor, program: renderProgram, resultater: renderResultater, saler: renderSaler, forutsetninger: renderForutsetninger })[state.fane](main, res);
 }
 
 function statusTekst(r) {
@@ -1478,7 +1479,8 @@ function renderRaadetFane(main, res) {
   main.append(h("div", { class: "gjelder" },
     h("p", { class: "naa-linje svak" }, "Gjelder ", h("b", {}, sc ? sc.navn.toLowerCase() : "egne verdier"), ": ",
       h("b", { class: "tall" }, `${pst(faktor)} av salget i 2026`), " og ", h("b", { class: "tall" }, `${kr(s.pakke)} per konsert`), ". ",
-      h("button", { type: "button", class: "stille liten", onclick: () => gaaTil("resultater") }, "Endre under Resultater")),
+      h("button", { type: "button", class: "stille liten", onclick: () => gaaTil("resultater") }, "Endre under Resultater"), " ",
+      h("button", { type: "button", class: "stille liten", onclick: () => gaaTil("spor") }, "Spør om rådet")),
     h("p", { class: "naa-linje svak liten" }, `Regelen bak rådet, som i notatet: høyest verdi blant valgene som holder rammen både med salget nå og hvis salget blir 20 % lavere. Salget kan ikke rettes opp etter signering. Pakkeprisen kjenner Maja før hun signerer, derfor er den et vilkår.`),
     ...varsler));
 
@@ -2103,6 +2105,100 @@ function leggTilSal(mal) {
 }
 
 /* ---------- Forutsetninger ---------- */
+/* ---------- Spør: chatboten for Maja ----------
+ * Språkmodellen forklarer, motoren regner (src/chat.js). Nøkkelen ligger bare i nettleserens lokale lager.
+ * Samtalen ligger bare i minnet og forsvinner når siden lastes på nytt.
+ */
+function renderSpor(main) {
+  const c = state.chat;
+  const nokkel = lesNokkel();
+  main.append(h("section", { class: "seksjon spor" },
+    h("h2", {}, "Spør om rådet"),
+    h("p", { class: "ingress" }, "Still spørsmål med egne ord. Konsertplan regner, og en språkmodell (Claude fra Anthropic) forklarer svaret med tallene herfra. Spør du «hva om», prøver Konsertplan endringen uten å endre planen din. Vil du beholde den, trykker du «Bruk i planen»."),
+    nokkel ? chatFlate(c) : nokkelBoks()));
+  const logg = main.querySelector(".chat-logg");
+  if (logg) logg.scrollTop = logg.scrollHeight;
+}
+
+function nokkelBoks() {
+  const felt = h("input", { type: "password", id: "chat-nokkel", autocomplete: "off", spellcheck: "false", placeholder: "Lim inn nøkkelen her" });
+  const lagreN = () => { if (felt.value.trim()) { lagreNokkel(felt.value); render(); } };
+  felt.addEventListener("keydown", e => { if (e.key === "Enter") lagreN(); });
+  return h("div", { class: "chat-nokkel" },
+    h("label", { for: "chat-nokkel" }, "Anthropic API-nøkkel"),
+    h("div", { class: "chat-nokkel-rad" }, felt, h("button", { type: "button", onclick: lagreN }, "Lagre i denne nettleseren")),
+    h("p", { class: "liten svak" }, "Nøkkelen lagres bare i nettleserens lokale lager på denne maskinen og sendes bare til Anthropic. Den er aldri med i «Lagre»-fila. Hvert spørsmål koster litt på kontoen nøkkelen tilhører, så sett gjerne en brukergrense på nøkkelen."));
+}
+
+function chatFlate(c) {
+  const t = tilstand(state.data);
+  const logg = h("div", { class: "chat-logg", "aria-live": "polite" });
+  if (!c.logg.length) logg.append(h("p", { class: "chat-tom svak" }, `Rådet nå: ${t.raadet.valg === "Avstå" ? "avstå" : t.raadet.valg}. Spør om hvorfor, eller om hva som skal til for at det snur.`));
+  for (const m of c.logg) logg.append(chatMelding(m));
+  if (c.venter) logg.append(h("div", { class: "chat-melding bot venter" }, h("span", { class: "svak" }, "Konsertplan regner og skriver svar")));
+  const felt = h("textarea", { id: "chat-felt", rows: "2", placeholder: "Skriv et spørsmål, for eksempel: Hva om vi bare selger 85 %?", disabled: c.venter });
+  const send = tekst => { tekst = (tekst ?? felt.value).trim(); if (tekst && !c.venter) sporModellen(tekst); };
+  felt.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+  if (!c.venter) requestAnimationFrame(() => felt.focus({ preventScroll: true }));
+  return h("div", { class: "chat" },
+    logg,
+    c.venter ? null : h("div", { class: "chat-forslag" }, ...chatForslag(t).map(f => h("button", { type: "button", class: "forslag-knapp", onclick: () => send(f) }, f))),
+    h("form", { class: "chat-skjema", onsubmit: e => { e.preventDefault(); send(); } },
+      felt, h("button", { type: "submit", disabled: c.venter }, "Spør")),
+    h("p", { class: "liten svak chat-bunn" }, "Nøkkelen er lagret i denne nettleseren. ",
+      h("button", { type: "button", class: "stille liten", onclick: () => { glemNokkel(); render(); } }, "Glem nøkkelen"), " ",
+      c.logg.length ? h("button", { type: "button", class: "stille liten", disabled: c.venter, onclick: () => { state.chat = { samtale: nySamtale(), logg: [], venter: false }; render(); } }, "Tøm samtalen") : null));
+}
+
+function chatMelding(m) {
+  if (m.rolle === "maja") return h("div", { class: "chat-melding maja" }, m.tekst);
+  if (m.rolle === "feil") return h("div", { class: "chat-melding feil varsel" }, m.tekst);
+  return h("div", { class: "chat-melding bot" },
+    ...avsnitt(m.tekst).map(a => (a.type === "punkter" ? h("ul", {}, ...a.linjer.map(l => h("li", {}, l))) : h("p", {}, a.tekst))),
+    m.avkortet ? h("p", { class: "liten svak" }, "Svaret ble kuttet fordi det ble for langt.") : null,
+    ...m.kjoringer.map(chatRegnet));
+}
+
+/** Det Konsertplan regnet for et «hva om»: endringen, tallene før og etter, og knappen «Bruk i planen». */
+function chatRegnet(k) {
+  const utenfor = k.endringer.some(e => e.tekst.includes("utenfor casen")) || k.endringer.some(e => /^Sal, /.test(e.tekst));
+  const rader = k.etter.valgene.filter(v => v.navn !== "Avstå").map(v => {
+    const f = k.foer.valgene.find(x => x.navn === v.navn);
+    const raad = v.navn === k.etter.raadet;
+    return h("tr", { class: raad ? "raad" : "" },
+      h("td", {}, v.navn, raad ? h("span", { class: "merke raad-merke" }, "rådet") : null),
+      h("td", { class: `hoyre tall ${v.verdi_for_sceneskift_kr < 0 ? "minus" : ""}` }, f ? `${tall(f.verdi_for_sceneskift_kr)} → ` : "", h("b", {}, kr(v.verdi_for_sceneskift_kr))),
+      h("td", { class: `hoyre tall ${v.holder_rammen_naa === false ? "minus" : ""}` }, f ? `${tall(f.maa_ha_klart_kr)} → ` : "", h("b", {}, kr(v.maa_ha_klart_kr))));
+  });
+  return h("div", { class: "chat-regnet" },
+    h("p", { class: "chat-regnet-tittel" }, "Konsertplan regnet", utenfor ? h("span", { class: "merke varsel" }, "utenfor casen") : null),
+    h("ul", { class: "liten" }, ...k.endringer.map(e => h("li", {}, `${e.tekst}: ${e.fra} → ${e.til}`))),
+    h("div", { class: "tabellramme" }, h("table", { class: "chat-tabell" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Valg"), h("th", { class: "hoyre" }, "Verdi for Sceneskift"), h("th", { class: "hoyre" }, "Må ha klart"))),
+      h("tbody", {}, ...rader))),
+    h("p", { class: "liten" }, k.foer.raadet === k.etter.raadet ? `Rådet er fortsatt ${k.etter.raadet === "Avstå" ? "å avstå" : k.etter.raadet}.` : `Rådet snur: ${k.foer.raadet} → ${k.etter.raadet === "Avstå" ? "avstå" : k.etter.raadet}.`,
+      " ",
+      k.brukt ? h("span", { class: "svak" }, "Brukt i planen.")
+        : h("button", { type: "button", class: "stille liten", onclick: () => { if (brukEndring(state.data, k.input)) { k.brukt = true; reparer(); oppdater(); } } }, "Bruk i planen")));
+}
+
+async function sporModellen(tekst) {
+  const c = state.chat;
+  const nokkel = lesNokkel();
+  c.logg.push({ rolle: "maja", tekst });
+  c.venter = true;
+  render();
+  try {
+    const svar = await spor(c.samtale, state.data, tekst, lagKall(nokkel));
+    c.logg.push({ rolle: "bot", ...svar });
+  } catch (e) {
+    c.logg.push({ rolle: "feil", tekst: e.message || "Noe gikk galt." });
+  } finally {
+    c.venter = false;
+    if (state.chat === c) render();
+  }
+}
+
 function renderForutsetninger(main) {
   const s = state.data.sesong;
   const felter = [

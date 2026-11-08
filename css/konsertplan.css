@@ -600,3 +600,37 @@ body.fane-raadet .stripe { display: none; }
   .blanding { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .forklar-rad { grid-template-columns: 1fr; }
 }
+
+/* Spør: chatboten for Maja */
+.spor { max-width: 880px; }
+.chat-nokkel { background: var(--papir); box-shadow: 0 1px 3px rgba(0,0,0,.08); border-radius: 4px; padding: 20px 24px; display: grid; gap: 8px; max-width: 640px; }
+.chat-nokkel label { font-weight: 600; }
+.chat-nokkel-rad { display: flex; gap: 10px; flex-wrap: wrap; }
+.chat-nokkel-rad input { flex: 1 1 260px; padding: 7px 10px; border: 1.5px solid var(--strek); border-radius: 3px; background: #fff; }
+.chat { display: grid; gap: 12px; }
+.chat-logg { background: var(--papir); box-shadow: 0 1px 3px rgba(0,0,0,.08); border-radius: 4px; padding: 18px 22px; display: grid; gap: 14px; max-height: 62vh; overflow-y: auto; align-content: start; }
+.chat-tom { font-size: 15px; }
+.chat-melding { max-width: 68ch; }
+.chat-melding p + p, .chat-melding p + ul, .chat-melding ul + p { margin-top: 8px; }
+.chat-melding ul { margin: 6px 0 0; padding-left: 20px; }
+.chat-melding.maja { justify-self: end; background: var(--tavle); border-radius: 4px; padding: 8px 14px; font-weight: 500; }
+.chat-melding.bot { justify-self: start; border-left: 3px solid var(--blekk); padding: 2px 0 2px 14px; }
+.chat-melding.venter { border-left-color: var(--strek); }
+.chat-melding.feil { justify-self: start; }
+.chat-regnet { margin-top: 12px; border-top: 1px solid var(--strek-svak); padding-top: 10px; display: grid; gap: 6px; }
+.chat-regnet-tittel { font-family: "Marker", cursive; font-size: 14px; color: var(--blekk-svak); display: flex; gap: 10px; align-items: baseline; }
+.chat-regnet-tittel .merke { font-family: "Archivo", system-ui, sans-serif; }
+.chat-regnet ul { margin: 0; padding-left: 18px; }
+.chat-regnet .tabellramme { box-shadow: none; border: 1px solid var(--strek-svak); }
+.chat-tabell th, .chat-tabell td { padding: 7px 10px; font-size: 14px; }
+.chat-tabell tr.raad td:first-child { font-weight: 600; }
+.chat-tabell .merke { margin-left: 8px; }
+.chat-forslag { display: flex; flex-wrap: wrap; gap: 8px; }
+.chat-skjema { display: flex; gap: 10px; align-items: stretch; }
+.chat-skjema textarea { flex: 1; resize: vertical; padding: 9px 12px; border: 1.5px solid var(--strek); border-radius: 3px; background: #fff; min-height: 46px; }
+.chat-skjema textarea:focus-visible { outline: 2.5px solid var(--blaa); outline-offset: 2px; }
+.chat-bunn { margin-top: -2px; }
+@media (max-width: 760px) {
+  .chat-logg { padding: 14px 14px; max-height: none; }
+  .chat-skjema { flex-direction: column; }
+}

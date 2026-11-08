@@ -8,7 +8,7 @@ Sceneskift, salene og tallene er fiktive og laget for undervisning. Privat til e
 
 Dobbeltklikk `index.html`. Siden trenger ikke nett og ingen server. Alt regnes i nettleseren og lagres i nettleserens lokale lager på maskinen. «Lagre sesong» gir en JSON-fil som kan åpnes igjen med «Åpne sesong», også på en annen maskin.
 
-Fanene kan lenkes direkte: `index.html#raadet` (første fane, åpnes uten lenke), `#program`, `#resultater`, `#saler`, `#forutsetninger`. Åpnes siden fra presentasjonen (`index.html?fra=presentasjon#program`), vises «Tilbake til presentasjonen» øverst. Lenken går til `../sceneskift-kart/site/index.html`, så de to repoene må ligge i samme mappe. Uten `?fra=presentasjon` er lenken skjult. Med `&tilbake=slutt` går lenken rett til den siden (`#slutt`, avslutningen) i stedet for tilbake i historikken.
+Fanene kan lenkes direkte: `index.html#raadet` (første fane, åpnes uten lenke), `#spor`, `#program`, `#resultater`, `#saler`, `#forutsetninger`. Åpnes siden fra presentasjonen (`index.html?fra=presentasjon#program`), vises «Tilbake til presentasjonen» øverst. Lenken går til `../sceneskift-kart/site/index.html`, så de to repoene må ligge i samme mappe. Uten `?fra=presentasjon` er lenken skjult. Med `&tilbake=slutt` går lenken rett til den siden (`#slutt`, avslutningen) i stedet for tilbake i historikken.
 
 ## Sceneskift 2027 er utgangspunktet
 
@@ -48,6 +48,22 @@ Utvidelsene utenfor casen har standard 0, fordi oppgaveteksten sier at det utove
 
 Alle tre endres under Rådet og Forutsetninger. Resultater og Rådet viser en merknad så lenge en av dem er i bruk.
 
+## Spør: chatbot for Maja
+
+Fanen «Spør» lar Maja stille spørsmål med egne ord. Svarene skrives av en språkmodell (Claude Opus 5.5 fra Anthropic, `claude-opus-5-5`), men modellen regner ikke selv. Arbeidsdelingen er den foreleser beskrev 4.11: motoren regner, språkmodellen formidler (`src/chat.js`).
+
+1. Modellen får forutsetningene og resultatene fra motoren som JSON (`tilstand`): rådet, verdi og «må ha klart» for hvert valg nå og ved 20 % lavere salg, når rådet snur, grensene, reglene fra arbeidsboka og programmet. Forskjeller den trenger (over eller under rammen, mot rådet) er regnet ferdig. Tallene sendes med Majas første spørsmål og på nytt bare når planen er endret.
+2. Spør Maja «hva om», bruker modellen verktøyet `prov_endring` (salg, pakke, startfinansiering, billettpris, scenario, og utenfor casen: bar, uforutsette kostnader, lokaleeffekt, sal, salg, oppsett og pakke per konsert). Verktøyet endrer en kopi av planen, motoren regner, og modellen får tallene før og etter. Ugyldige verdier avvises med en feilmelding til modellen, og ingenting regnes.
+3. Under svaret viser siden selv hva Konsertplan regnet (endringen, verdi og «må ha klart» før og etter, og om rådet snur), med knappen «Bruk i planen». Majas plan endres bare når hun trykker.
+
+Instruksen (`SYSTEM`) sier at modellen aldri skal regne, bare bruke tallene den har fått, svare kort på Majas språk uten fagord, ikke gi et annet råd enn Konsertplan, og si fra når noe er utenfor casen.
+
+API-nøkkelen limes inn i fanen og lagres bare i nettleserens lokale lager på maskinen, under en egen nøkkel (`konsertplan.anthropic.nokkel`). Den er aldri med i sesongen, i «Lagre»-fila eller i repoet, og en test sjekker at ingen fil i repoet har noe som ligner en nøkkel. Kallet går rett fra nettleseren til `api.anthropic.com` med hodet `anthropic-dangerous-direct-browser-access`, fordi siden ikke har noen server. Det er greit fordi nøkkelen er brukerens egen. Lag en egen nøkkel med lav brukergrense til dette. Samtalen ligger bare i minnet og forsvinner når siden lastes på nytt.
+
+Valg i kallet: adaptiv tenkning, `effort: "low"` (korte svar, tallene kommer fra motoren), `fallbacks: "default"` (avslår modellen, prøver API-et en annen modell) og ingen tvunget verktøybruk (gir feil på denne modellen). Avslag, nettfeil og feil fra API-et vises på norsk, og samtalen settes da tilbake til før spørsmålet.
+
+Testene (`test/chat.test.js`) bruker en falsk modell og et falskt `fetch`, og stopper alt nett. De sjekker at verktøyet treffer scenarioene i arbeidsboka på kronen, at verktøysvaret som går tilbake til modellen har motorens tall, at Majas plan ikke endres, hodene i kallet, at nøkkelen bare ligger i hodet, og feilhåndteringen. Med ekte nøkkel er chatten ikke testet i denne versjonen.
+
 ## Reglene
 
 Fra oppgaveteksten og arbeidsboka `Sceneskift_AK2_modell.xlsx`. Per konsert i måned m med N betalte billetter: oppgjør N × (350 − 10) i måned m + 1, publikumsutgift N × 10 i måned m, pakke 30 000 måneden før og 30 000 i konsertmåneden. Leie etter salens byggeklosser: fast beløp per konsert, andel av oppgjøret med minimum, engangsbeløp, eller sesongleie med betalingsplan. Nåverdi med (1,04)^(t/12). Finansieringsbehov er laveste saldo ved månedsslutt.
@@ -62,6 +78,7 @@ Kontrolltallene (basis): nåverdi A 51 324, B 201 394, C 173 787 kr, behov A 231
 - `src/motor.js`: regnemotoren, uten DOM. Også scenarioene (`aktivtScenario`, `velgScenario`, `beregnScenarioer`), hva som snur rådet (`handlinger`, `finnGrense`, `grenser`, `beslutningsregler`) og rådet for Maja (`raadet`, `lokaleeffektGrense`, utvidelsene `pakkeFor`, `barTilSceneskift`, `utvidelserIBruk`)
 - `src/forslag.js`: sjangerregelen (sjanger gir oppsett, forventet salg gir sal)
 - `src/standard-2027.js`: Sceneskift 2027 som standardsesong, med de fem scenarioene fra arbeidsboka
+- `src/chat.js`: chatboten (tilstand fra motoren, verktøyet `prov_endring`, samtalen og kallet mot API-et), uten DOM
 - `src/lagring.js`, `src/figurer.js`, `src/app.js`: lagring, SVG-figurer, grensesnitt
 - `konsertplan.js`: alle modulene slått sammen til én fil, så siden virker rett fra fil. Generert, ikke rediger
 - `img/`: salbildene er hentet fra case-nettsidene (alu042.github.io/met3-lune-sal, met3-soyleverket, met3-skarvkaien). `publikum.jpg` er Bjartes eget
