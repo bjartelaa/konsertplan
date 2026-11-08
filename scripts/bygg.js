@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const rekkefolge = ["motor.js", "forslag.js", "standard-2027.js", "lagring.js", "figurer.js", "app.js"];
+const rekkefolge = ["motor.js", "forslag.js", "standard-2027.js", "lagring.js", "figurer.js", "chat.js", "app.js"];
 let ut = "// Generert av scripts/bygg.js fra src/. Rediger kildene, ikke denne fila.\n(() => {\n\"use strict\";\n";
 for (const f of rekkefolge) {
   const kode = readFileSync(join(rot, "src", f), "utf8")
