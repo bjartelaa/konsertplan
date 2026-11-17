@@ -804,16 +804,16 @@ function glemNokkel(lager) {
 /* ---------- Tallene modellen får ---------- */
 const kroner = v => Math.round(v ?? 0);
 const prosent1 = v => Math.round((v ?? 0) * 1000) / 10;
-const tall = v => Math.round(v ?? 0).toLocaleString("nb-NO").replace(/\s/g, " "); // vanlig mellomrom, ikke hardt
+const tallC = v => Math.round(v ?? 0).toLocaleString("nb-NO").replace(/\s/g, " "); // vanlig mellomrom, ikke hardt
 
 /** Leievilkårene til en sal i klartekst, fra byggeklossene i motoren. */
 function leieTekst(sal, mnd) {
   const naar = { konsertmaaned: "i konsertmåneden", maanedEtter: "måneden etter konserten", maanedFoer: "måneden før konserten" };
   return (sal.leie ?? []).map(b => {
-    if (b.type === "perKonsert") return `${tall(b.belop)} kr per konsert, betales ${naar[b.naar] ?? b.naar}`;
-    if (b.type === "andel") return `${prosent1(b.andel)} % av billettoppgjøret (billettpris minus gebyr), minst ${tall(b.minimum)} kr per konsert, betales ${naar[b.naar] ?? b.naar}`;
-    if (b.type === "engang") return `${b.navn ?? "Engangsbeløp"} ${tall(b.belop)} kr, betales ${(mnd[b.tidspunkt ?? 0] ?? "").toLowerCase()}`;
-    if (b.type === "sesong") return `${b.navn ?? "Sesongleie"} ${tall(b.belop)} kr for hele våren, betales ${(b.plan ?? []).map(p => `${tall(b.belop * p.andel)} kr ${p.tidspunkt === 0 ? "før januar" : `ved slutten av ${(mnd[p.tidspunkt] ?? "").toLowerCase()}`}`).join(" og ")}`;
+    if (b.type === "perKonsert") return `${tallC(b.belop)} kr per konsert, betales ${naar[b.naar] ?? b.naar}`;
+    if (b.type === "andel") return `${prosent1(b.andel)} % av billettoppgjøret (billettpris minus gebyr), minst ${tallC(b.minimum)} kr per konsert, betales ${naar[b.naar] ?? b.naar}`;
+    if (b.type === "engang") return `${b.navn ?? "Engangsbeløp"} ${tallC(b.belop)} kr, betales ${(mnd[b.tidspunkt ?? 0] ?? "").toLowerCase()}`;
+    if (b.type === "sesong") return `${b.navn ?? "Sesongleie"} ${tallC(b.belop)} kr for hele våren, betales ${(b.plan ?? []).map(p => `${tallC(b.belop * p.andel)} kr ${p.tidspunkt === 0 ? "før januar" : `ved slutten av ${(mnd[p.tidspunkt] ?? "").toLowerCase()}`}`).join(" og ")}`;
     return JSON.stringify(b);
   }).join(". ");
 }
@@ -823,8 +823,8 @@ function slikRegnesDet(s) {
   const r = prosent1(s.rente), lr = prosent1(s.laanRente);
   return {
     pengene_per_konsert:
-      `Billettoppgjøret er antall betalte billetter ganger (billettpris ${tall(s.billettpris)} kr minus gebyr ${tall(s.gebyr)} kr), og kommer måneden etter konserten. ` +
-      `Publikumsutgiften er ${tall(s.utgiftPerBillett)} kr per billett, betalt i konsertmåneden. ` +
+      `Billettoppgjøret er antall betalte billetter ganger (billettpris ${tallC(s.billettpris)} kr minus gebyr ${tallC(s.gebyr)} kr), og kommer måneden etter konserten. ` +
+      `Publikumsutgiften er ${tallC(s.utgiftPerBillett)} kr per billett, betalt i konsertmåneden. ` +
       `Pakken fra Rigg & Ro betales med ${prosent1(s.pakkeDel1Andel ?? 0.5)} % måneden før konserten og resten i konsertmåneden. ` +
       `Leien følger vilkårene til salen (se saler). Antall billetter er forventet salg, men aldri mer enn plassene i salen.`,
     kontoen_ved_maanedsslutt:
