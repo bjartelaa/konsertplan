@@ -20,6 +20,7 @@
     </div>
     <div class="topp-hoyre">
       <a class="tilbake" id="til-presentasjon" href="../sceneskift-kart/site/index.html#6" hidden>Tilbake til presentasjonen</a>
+      <button type="button" id="knapp-fullskjerm" class="bryter" aria-pressed="false" title="Fullskjerm (Esc for å gå ut)">Fullskjerm</button>
       <button type="button" id="knapp-forklar" class="bryter" aria-pressed="false">Forklaringer</button>
       <button type="button" id="knapp-aapne">Åpne</button>
       <input type="file" id="fil" accept="application/json,.json" hidden>
@@ -28,9 +29,9 @@
     </div>
   </header>
   <nav class="faner" aria-label="Deler av verktøyet">
-    <button type="button" data-fane="raadet" aria-pressed="true">Rådet</button>
-    <button type="button" data-fane="program">Program</button>
+    <button type="button" data-fane="raadet" aria-pressed="true">Anbefaling</button>
     <button type="button" data-fane="resultater">Resultater</button>
+    <button type="button" data-fane="program">Program</button>
     <button type="button" data-fane="saler">Saler</button>
     <button type="button" data-fane="forutsetninger">Forutsetninger</button>
   </nav>
@@ -42,14 +43,19 @@
 
 <button type="button" id="gaffarull" class="gaffarull" aria-expanded="false" aria-controls="chatpanel">
   <svg class="rull" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-    <circle cx="50" cy="50" r="46" fill="#1c1c1b"/>
-    <circle cx="50" cy="50" r="46" fill="none" stroke="#3a3a38" stroke-width="1.5"/>
-    <circle cx="50" cy="50" r="38" fill="none" stroke="#2a2a29" stroke-width="1"/>
-    <circle cx="50" cy="50" r="31" fill="none" stroke="#2a2a29" stroke-width="1"/>
-    <path d="M18 34 A36 36 0 0 1 44 15" fill="none" stroke="#ffffff" stroke-opacity=".18" stroke-width="5" stroke-linecap="round"/>
-    <circle cx="50" cy="50" r="23" fill="#c9a26a"/>
-    <circle cx="50" cy="50" r="23" fill="none" stroke="#a9834d" stroke-width="2"/>
-    <circle cx="50" cy="50" r="16" fill="#efe9dc"/>
+    <defs>
+      <mask id="rull-hull"><rect width="100" height="100" fill="#fff"/><circle cx="50" cy="50" r="24" fill="#000"/></mask>
+    </defs>
+    <g mask="url(#rull-hull)">
+      <circle cx="50" cy="50" r="46" fill="#1c1c1b"/>
+      <circle cx="50" cy="50" r="45.2" fill="none" stroke="#3b3b39" stroke-width="1.2"/>
+      <circle cx="50" cy="50" r="40" fill="none" stroke="#000" stroke-opacity=".35" stroke-width=".8"/>
+      <circle cx="50" cy="50" r="35" fill="none" stroke="#000" stroke-opacity=".3" stroke-width=".8"/>
+      <path d="M17 36 A35 35 0 0 1 40 16" fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="50" cy="50" r="30" fill="#c19458"/>
+      <circle cx="50" cy="50" r="30" fill="none" stroke="#000" stroke-opacity=".45" stroke-width="1.2"/>
+      <circle cx="50" cy="50" r="24.8" fill="none" stroke="#7d5a2e" stroke-width="1.6"/>
+    </g>
   </svg>
   <span class="teip">Spør</span>
 </button>

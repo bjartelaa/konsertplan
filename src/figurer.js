@@ -16,6 +16,41 @@ function stegFor(spenn) {
   return kandidater.find(s => spenn / s <= 7) ?? 1000000;
 }
 
+/**
+ * Tall ved hover (eller trykk) på en figur: en loddrett strek og en boks med verdiene for kolonnen.
+ * kolonner = [{ x, venstre, hoyre, tittel, rader: [{ navn, farge, verdi }] }] i figurens koordinater.
+ */
+function hoverLag(svg, P, W, kolonner) {
+  const lag = svgEl("g", { class: "hover-lag" });
+  const strek = svgEl("line", { class: "hover-strek", y1: P.y1, y2: P.y2, x1: 0, x2: 0 });
+  const boks = svgEl("g", { class: "hover-boks" });
+  lag.append(strek, boks);
+  lag.style.display = "none";
+  const vis = k => {
+    strek.setAttribute("x1", k.x); strek.setAttribute("x2", k.x);
+    boks.replaceChildren();
+    const linjeH = 22, bredde = 230, hoyde = 34 + k.rader.length * linjeH;
+    const bx = k.x + 14 + bredde > W - 4 ? k.x - 14 - bredde : k.x + 14;
+    boks.append(svgEl("rect", { x: bx, y: P.y1, width: bredde, height: hoyde, rx: 8, class: "hover-bakgrunn" }),
+      svgEl("text", { x: bx + 12, y: P.y1 + 22, class: "hover-tittel" }, k.tittel));
+    k.rader.forEach((r, i) => {
+      const y = P.y1 + 22 + (i + 1) * linjeH;
+      boks.append(svgEl("circle", { cx: bx + 17, cy: y - 5, r: 5, style: `fill: var(--${r.farge})` }),
+        svgEl("text", { x: bx + 30, y, class: "hover-navn" }, r.navn),
+        svgEl("text", { x: bx + bredde - 12, y, class: `hover-verdi${r.verdi < 0 ? " minus" : ""}`, "text-anchor": "end" }, `${tallF(r.verdi)} kr`));
+    });
+    lag.style.display = "";
+  };
+  kolonner.forEach(k => {
+    const sone = svgEl("rect", { x: k.venstre, y: P.y1, width: Math.max(1, k.hoyre - k.venstre), height: P.y2 - P.y1, class: "hover-sone" });
+    sone.addEventListener("pointerenter", () => vis(k));
+    sone.addEventListener("pointerdown", () => vis(k));
+    svg.appendChild(sone);
+  });
+  svg.appendChild(lag);
+  svg.addEventListener("pointerleave", () => { lag.style.display = "none"; });
+}
+
 /** Saldo per måned: én linje per serie. serier = [{navn, farge, verdier, bred}] */
 export function tegnSaldo(svg, serier, etiketter, ramme) {
   svg.replaceChildren();
@@ -47,6 +82,9 @@ export function tegnSaldo(svg, serier, etiketter, ramme) {
       svg.appendChild(svgEl("text", { class: "serie", x: sx(siste) - 8, y: sy(s.verdier[siste]) - 12, "text-anchor": "end", style: `fill: var(--${s.farge})` }, s.navn));
     }
   }
+  const halv = (P.x2 - P.x1) / (n - 1) / 2;
+  hoverLag(svg, P, W, etiketter.map((e, i) => ({ x: sx(i), venstre: sx(i) - halv, hoyre: sx(i) + halv, tittel: `Saldo, ${e}`,
+    rader: serier.filter(s => s.verdier[i] != null).map(s => ({ navn: s.navn, farge: s.farge, verdi: s.verdier[i] })) })));
 }
 
 /** Bidrag per konsert: to stolper per konsert. serier = [{navn, farge, verdier}], etiketter per konsert. */
@@ -74,4 +112,6 @@ export function tegnBidrag(svg, serier, etiketter) {
       svg.appendChild(svgEl("rect", { x, y: Math.min(sy(v), sy(0)), width: bredde - 3, height: Math.abs(sy(v) - sy(0)), style: `fill: var(--${s.farge})`, opacity: j === 0 ? 1 : 0.55 }));
     });
   });
+  hoverLag(svg, P, W, etiketter.map((e, i) => ({ x: P.x1 + gruppe * (i + 0.5), venstre: P.x1 + gruppe * i, hoyre: P.x1 + gruppe * (i + 1), tittel: `Bidrag, konsert ${e}`,
+    rader: serier.map(s => ({ navn: s.navn, farge: s.farge, verdi: s.verdier[i] ?? 0 })) })));
 }

@@ -22,6 +22,11 @@ export const SESONG_2027 = {
   barPerGjest: 0,            // omsetning i baren per betalt billett, kr
   barAndel: 0,               // Sceneskifts andel av baromsetningen, gjøres opp måneden etter som billettene
   uforutsett: 0,             // buffer for kostnader pakken ikke dekker, kr per konsert, betalt i konsertmåneden
+  markedsforing: 0,          // ekstra markedsføring for hele sesongen, fordelt likt på konsertene, betalt måneden før. Utenfor casen
+  laanType: "kassekreditt",  // lån ut over rammen: "kassekreditt" (det som trengs hver måned) eller "fast" (fast beløp fra laanStart)
+  laanStart: 0,              // fast lån: måneden lånet tas opp (0 = før januar)
+  laanSlutt: null,           // fast lån: måneden det betales tilbake (null = når saldoen er innenfor rammen igjen)
+  laanBelop: null,           // fast lån: beløpet (null = det største som trengs)
   scenarioer: [],            // fylles med SCENARIOER_2027 under
   maanedsnavn: ["Før januar", "Januar", "Februar", "Mars", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Desember"],
 };

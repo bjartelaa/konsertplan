@@ -60,9 +60,10 @@ function slikRegnesDet(s) {
     verdi_for_sceneskift:
       `Alle inn- og utbetalinger fra før januar til siste oppgjør, regnet om til dagens kroner med ${r} % realrente per år: et beløp ved slutten av måned t ganges med 1 / (1 + ${r} %) opphøyd i t/12. Summen er verdien (nåverdien). Planleggingen er betalt uansett og er ikke med.`,
     laan_ut_over_rammen:
-      `Utvidelse utenfor casen, gruppas antakelse. Casen holder lån utenfor. Går kontoen lenger ned enn rammen ved et månedsslutt, regnes det som ligger under rammen som et lån (kassekreditt) den måneden. ` +
-      `Lånet er det største slike beløpet. Renten er ${lr} % per år og regnes per måned: lånet den måneden ganger ${lr} % delt på 12. Rentekostnaden er summen av månedene. ` +
-      `Renten holdes utenfor verdien for Sceneskift. Verdi etter rente trekker rentene fra, regnet om til dagens kroner. Tallene per måned står i laan_per_maaned for hvert valg. ` +
+      `Utvidelse utenfor casen, gruppas antakelse. Casen sier at rammen er et krav, og arbeidsboka har ikke lån. Går kontoen lenger ned enn rammen ved et månedsslutt, må det som mangler lånes. ` +
+      `Lånetypen nå er ${s.laanType === "fast" ? `fast lån, tatt opp ${s.laanStart ? `ved slutten av måned ${s.laanStart}` : "før januar"} og betalt tilbake når kontoen er innenfor rammen igjen (eller i måneden gruppa har valgt). Det et fast lån ikke dekker, går på kassekreditt` : "kassekreditt: det som mangler hver måned lånes den måneden, og lånet betales ned av seg selv når oppgjørene kommer"}. ` +
+      `Renten er ${lr} % per år og regnes per måned: lånet den måneden ganger ${lr} % delt på 12. Rentekostnaden er summen av månedene. ` +
+      `Når et valg trenger lån, er verdien som vises i Konsertplan verdi etter rente: rentene trukket fra, regnet om til dagens kroner. Lånebeløpet selv (inn og tilbake) er ikke med i verdien. Tallene per måned står i laan_per_maaned for hvert valg. ` +
       `Lånet gjør et valg mulig, men ikke tryggere: blir salget lavere, må lånet bli større.`,
   };
 }
@@ -124,6 +125,7 @@ export function tilstand(data) {
         bar_omsetning_per_gjest_kr: kroner(s.barPerGjest),
         bar_andel_til_sceneskift_prosent: prosent1(s.barAndel),
         uforutsette_kostnader_per_konsert_kr: kroner(s.uforutsett),
+        ekstra_markedsforing_for_sesongen_kr: kroner(s.markedsforing ?? 0),
         lokaleeffekt_prosent: Object.fromEntries(saler.map(x => [x.id, prosent1(x.lokaleeffekt ?? 1)])),
         i_bruk_naa: utenfor,
       },
@@ -196,6 +198,7 @@ const CHAT_FELT = [
   ["bar_omsetning_per_gjest_kr", "barPerGjest", 1, 0, 5000, "Bar, omsetning per gjest (utenfor casen)"],
   ["bar_andel_prosent", "barAndel", 0.01, 0, 100, "Bar, Sceneskifts andel (utenfor casen)"],
   ["uforutsette_kostnader_per_konsert_kr", "uforutsett", 1, 0, 1000000, "Uforutsette kostnader per konsert (utenfor casen)"],
+  ["ekstra_markedsforing_for_sesongen_kr", "markedsforing", 1, 0, 10000000, "Ekstra markedsføring for sesongen (utenfor casen)"],
 ];
 
 export const VERKTOY = [{
@@ -205,7 +208,7 @@ export const VERKTOY = [{
     "Bruk den hver gang Maja spør «hva om», og når du trenger et tall som ikke står i tallene du har fått. " +
     "Verdiene er nye verdier, ikke tillegg: salget 20 % lavere enn Majas premiss er salg_prosent_av_2026 = 80. " +
     "Felt du ikke tar med, beholdes som nå. Majas plan endres ikke: hun kan selv trykke «Bruk i planen» etterpå. " +
-    "Bar, uforutsette kostnader, pakke per konsert, sal per konsert og lokaleeffekt er utenfor casen.",
+    "Bar, uforutsette kostnader, ekstra markedsføring, pakke per konsert, sal per konsert og lokaleeffekt er utenfor casen.",
   input_schema: {
     type: "object",
     additionalProperties: false,
@@ -218,6 +221,7 @@ export const VERKTOY = [{
       bar_omsetning_per_gjest_kr: { type: "number", description: "Utenfor casen. Baromsetning per betalt billett, kr." },
       bar_andel_prosent: { type: "number", description: "Utenfor casen. Sceneskifts andel av baromsetningen, prosent." },
       uforutsette_kostnader_per_konsert_kr: { type: "number", description: "Utenfor casen. Kostnader pakken ikke dekker, kr per konsert." },
+      ekstra_markedsforing_for_sesongen_kr: { type: "number", description: "Utenfor casen. Ekstra markedsføring for hele sesongen, kr, fordelt likt på konsertene og betalt måneden før. Passer med Høy etterspørsel." },
       lokaleeffekt: {
         type: "array", description: "Utenfor casen. Salget i en sal som prosent av etterspørselen (100 = lokalet påvirker ikke salget).",
         items: { type: "object", additionalProperties: false, properties: { sal: { type: "string", description: "Salens id, for eksempel C" }, prosent: { type: "number" } }, required: ["sal", "prosent"] },
@@ -365,7 +369,7 @@ Slik jobber du:
 - Skriv på Majas språk, på norsk bokmål. Hun er arrangør, ikke økonom. Si «verdi for Sceneskift» (i dagens kroner) i stedet for nåverdi, og «det dere må ha klart» eller «startfinansieringen dere trenger» i stedet for finansieringsbehov. Forklar ordene bare hvis hun spør.
 - Skriv beløp som «173 787 kr» og prosent som «79,8 %». Ingen markdown: ingen stjerner, overskrifter eller tabeller. Bruk aldri tankestrek eller bindestrek som skilletegn i en setning.
 - Rådet følger regelen i gruppas notat: høyest verdi blant valgene som holder rammen både med salget nå og hvis salget blir 20 % lavere. Gi aldri et annet råd enn Konsertplan. Er Maja uenig, vis hva som må endres for at rådet skal snu.
-- Casen sier at det utover billettene, publikumsutgiften, pakken og leien ikke er andre inntekter eller kostnader. Bar, uforutsette kostnader, pakkepris per konsert, saler blandet per konsert og lokaleeffekt er gruppas utvidelser. Når svaret bruker dem, si at det er utenfor casen. Står noe i forutsetninger.utenfor_casen.i_bruk_naa (for eksempel blandet program), nevn det alltid i svaret.
+- Casen sier at det utover billettene, publikumsutgiften, pakken og leien ikke er andre inntekter eller kostnader. Bar, uforutsette kostnader, ekstra markedsføring, pakkepris per konsert, saler blandet per konsert, lokaleeffekt og lån ut over rammen er gruppas utvidelser. Når svaret bruker dem, si at det er utenfor casen. Står noe i forutsetninger.utenfor_casen.i_bruk_naa (for eksempel blandet program), nevn det alltid i svaret.
 - Du vet ikke mer om salene, artistene eller markedet enn det som står i tallene. Ikke finn på fakta.
 - Handler spørsmålet om noe annet enn sesongen og rådet, si kort at du bare kan hjelpe med Konsertplan.
 

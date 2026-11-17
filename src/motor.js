@@ -17,6 +17,7 @@
 // utover postene i tabellen og lokaleleien ikke er andre inntekter eller kostnader:
 //   bar              + N × sesong.barPerGjest × sesong.barAndel   i m + 1 (gjøres opp som billettene)
 //   uforutsett       − sesong.uforutsett                          i m (kostnader pakken ikke dekker)
+//   markedsføring    − sesong.markedsforing / antall konserter    i m − 1 (ekstra markedsføring for sesongen, fordelt likt, måneden før)
 //   pakke per konsert: pakken for konserten er sesong.pakke + konsert.pakkeAvvik
 //
 // Byggeklosser for leie (sal.leie er en liste):
@@ -86,6 +87,7 @@ export function utvidelserIBruk(sesong, program) {
   const ut = [];
   if (barTilSceneskift(sesong)) ut.push("bar");
   if (sesong.uforutsett) ut.push("uforutsett");
+  if (sesong.markedsforing) ut.push("markedsforing");
   if (program.some(k => k.pakkeAvvik)) ut.push("pakkeAvvik");
   return ut;
 }
@@ -127,17 +129,18 @@ export function beregnPlan(sesong, saler, program, salVelger) {
   const salerIBruk = [...new Set(valgt.filter(Boolean))];
   const T = sisteTidspunkt(program, salerIBruk);
   const cf = new Array(T + 1).fill(0);
-  const linjer = { billetter: cf.slice(), utgift: cf.slice(), pakke: cf.slice(), leie: cf.slice(), bar: cf.slice(), uforutsett: cf.slice() };
+  const linjer = { billetter: cf.slice(), utgift: cf.slice(), pakke: cf.slice(), leie: cf.slice(), bar: cf.slice(), uforutsett: cf.slice(), markedsforing: cf.slice() };
   const legg = (linje, t, belop) => { const i = Math.max(0, Math.min(T, t)); cf[i] += belop; linjer[linje][i] += belop; };
 
   const del1 = sesong.pakkeDel1Andel ?? 0.5;
   const barPerBillett = barTilSceneskift(sesong);
   const uforutsett = sesong.uforutsett ?? 0;
+  const markedsforing = program.length ? (sesong.markedsforing ?? 0) / program.length : 0;
   const perKonsert = program.map((k, i) => {
     const sal = valgt[i];
     const m = k.maaned;
     const pakke = pakkeFor(sesong, k);
-    if (!sal) return { nr: k.nr, sal: null, n: 0, mulig: false, kappet: false, billettnetto: 0, utgift: 0, pakke, leie: 0, bar: 0, uforutsett: 0, bidrag: -pakke };
+    if (!sal) return { nr: k.nr, sal: null, n: 0, mulig: false, kappet: false, billettnetto: 0, utgift: 0, pakke, leie: 0, bar: 0, uforutsett: 0, markedsforing: 0, bidrag: -pakke };
     const b = billetter(sesong, k, sal);
     const n = b.n;
     const billettnetto = n * (sesong.billettpris - sesong.gebyr);
@@ -149,11 +152,12 @@ export function beregnPlan(sesong, saler, program, salVelger) {
     legg("pakke", m, -pakke * (1 - del1));
     if (bar) legg("bar", m + 1, bar);
     if (uforutsett) legg("uforutsett", m, -uforutsett);
+    if (markedsforing) legg("markedsforing", m - 1, -markedsforing);
     const leie = leieForKonsert(sesong, sal, n);
     for (const d of leie.deler) legg("leie", m + (NAAR[d.naar] ?? 0), -d.belop);
     return { nr: k.nr, sal: sal.id, n, onsket: b.onsket, kap: b.kap, mulig: b.mulig, kappet: b.kappet,
-             billettnetto, utgift, pakke, leie: leie.sum, leieDeler: leie.deler, bar, uforutsett,
-             bidrag: billettnetto - utgift - pakke - leie.sum + bar - uforutsett };
+             billettnetto, utgift, pakke, leie: leie.sum, leieDeler: leie.deler, bar, uforutsett, markedsforing,
+             bidrag: billettnetto - utgift - pakke - leie.sum + bar - uforutsett - markedsforing };
   });
 
   const faste = [];
@@ -166,20 +170,45 @@ export function beregnPlan(sesong, saler, program, salVelger) {
   const netto = cf.reduce((a, b) => a + b, 0);
   const behov = Math.max(0, -Math.min(...saldo));
   const fastLeie = faste.reduce((a, p) => a + p.belop, 0);
-  // Lån ut over rammen: det saldoen ligger under rammen ved hvert månedsslutt, som en kassekreditt.
-  // Renten regnes per måned på trukket beløp og holdes utenfor nåverdien, slik casen krever.
-  // Den vises som egen linje, og «nåverdi etter rente» diskonterer rentebetalingene på samme måte.
-  const ramme = sesong.ramme ?? Infinity;
-  const trekk = saldo.map(s => Math.max(0, -s - ramme));
-  const renteMnd = sesong.laanRente ?? 0;
-  const renter = trekk.map(t => t * renteMnd / 12);
-  const laan = Math.max(0, ...trekk);
-  const rentekostnad = renter.reduce((a, b) => a + b, 0);
-  const nvEtterRente = nv - renter.reduce((sum, r, t) => sum + r * diskonteringsfaktor(sesong, t), 0);
+  const L = laanPlan(sesong, saldo);
   return { T, cf, linjer, saldo, netto, nv, behov, perKonsert, faste, fastLeie,
            holderRammen: sesong.ramme == null ? null : behov <= sesong.ramme,
-           laan, trekk, renter, rentekostnad, nvEtterRente, maanederMedLaan: trekk.filter(t => t > 0).length,
+           ...L, nvEtterRente: nv - L.renterNv,
            salerIBruk: salerIBruk.map(x => x.id) };
+}
+
+/**
+ * Lån ut over rammen (utvidelse utenfor casen: casen sier at rammen er et krav, og arbeidsboka har ikke lån).
+ * Saldoen uten lån er den samme som før, så nåverdien og finansieringsbehovet er casens tall. Lånet legges oppå:
+ *   kassekreditt  (sesong.laanType "kassekreditt", standard) trekkes bare på det saldoen ligger under rammen ved
+ *                 hvert månedsslutt, og betales ned av seg selv når oppgjørene kommer
+ *   fast lån      (laanType "fast") et beløp (laanBelop, null = det største som trengs) tas opp ved slutten av måned
+ *                 laanStart (0 = før januar) og betales tilbake ved slutten av måned laanSlutt (null = måneden etter
+ *                 at saldoen er tilbake innenfor rammen). Det lånet ikke dekker, går på kassekreditt (rest)
+ * Renten (laanRente per år) regnes per måned på det som er lånt ved månedsslutt. «Nåverdi etter rente» trekker fra
+ * rentene diskontert som resten av kontantstrømmen. Lånebeløpet selv (inn og tilbake) holdes utenfor nåverdien.
+ */
+export function laanPlan(sesong, saldo) {
+  const ramme = sesong.ramme ?? Infinity;
+  const T = saldo.length - 1;
+  const behovOver = saldo.map(s => Math.max(0, -s - ramme));         // det som mangler hver måned uten lån
+  const sisteMangel = behovOver.reduce((a, v, t) => (v > 0 ? t : a), -1);
+  const type = sesong.laanType === "fast" ? "fast" : "kassekreditt";
+  let fast = behovOver.map(() => 0), start = null, slutt = null, belop = 0;
+  if (type === "fast" && sisteMangel >= 0) {
+    start = Math.max(0, Math.min(T, Math.round(sesong.laanStart ?? 0)));
+    slutt = sesong.laanSlutt == null ? Math.min(T, Math.max(start, sisteMangel) + 1) : Math.max(start + 1, Math.min(T, Math.round(sesong.laanSlutt)));
+    belop = sesong.laanBelop == null ? Math.max(0, ...behovOver.slice(start, slutt)) : Math.max(0, sesong.laanBelop);
+    fast = behovOver.map((_, t) => (t >= start && t < slutt ? belop : 0));
+  }
+  const rest = behovOver.map((v, t) => Math.max(0, v - fast[t]));    // kassekreditt for det fast lån ikke dekker
+  const trekk = behovOver.map((_, t) => fast[t] + rest[t]);          // lånt i alt ved månedsslutt
+  const renteAar = sesong.laanRente ?? 0;
+  const renter = trekk.map(x => x * renteAar / 12);
+  const renterNv = renter.reduce((sum, r, t) => sum + r * diskonteringsfaktor(sesong, t), 0);
+  return { laanType: type, laanStart: start, laanSlutt: slutt, laanBelop: belop, behovOver, fastLaan: fast, kreditt: rest,
+           laan: Math.max(0, ...trekk), trekk, renter, rentekostnad: renter.reduce((a, b) => a + b, 0), renterNv,
+           maanederMedLaan: trekk.filter(x => x > 0).length, restKreditt: Math.max(0, ...rest) };
 }
 
 /** Alt i én sal: samme sal på alle konsertene, med konsertens oppsett der salen kan, ellers det andre oppsettet. */
@@ -198,7 +227,7 @@ export function beregnAlle(sesong, saler, program) {
   for (const s of saler) altI[s.id] = beregnAltI(sesong, saler, program, s);
   const egen = beregnPlan(sesong, saler, program, k => k.salId);
   const blandet = new Set(program.map(k => k.salId)).size > 1;
-  return { altI, egen, blandet, avstaa: { nv: 0, netto: 0, behov: 0, holderRammen: true, laan: 0, rentekostnad: 0, nvEtterRente: 0, maanederMedLaan: 0 } };
+  return { altI, egen, blandet, avstaa: { nv: 0, netto: 0, behov: 0, holderRammen: true, laan: 0, rentekostnad: 0, nvEtterRente: 0, maanederMedLaan: 0, trekk: [], renter: [] } };
 }
 
 /* ---------- Scenarioer ----------
@@ -299,11 +328,13 @@ export function beslutningsregler(sesong, saler, program) {
   const holder = r => r.holderRammen !== false;
   const naa = hd.map(x => ({ ...x, r: x.hent(sesong),
                              iAlle: scenarioer.every(sc => holder(x.hent(velgScenario({ ...sesong }, sc)))) }));
-  const beste = liste => liste.reduce((a, b) => (b.r.nv > a.r.nv ? b : a));
+  // Rangeres etter nåverdi etter rente (lik nåverdien når handlingen holder rammen, så regel 1 og 2 er som før)
+  const nvR = r => r.nvEtterRente ?? r.nv;
+  const beste = liste => liste.reduce((a, b) => (nvR(b.r) > nvR(a.r) ? b : a));
   const regel = (nr, navn, krav, filter) => {
     const kandidater = naa.filter(filter);
     const v = beste(kandidater);
-    return { nr, navn, krav, valg: { id: v.id, navn: v.navn, kort: v.kort, farge: v.farge, type: v.type, nv: v.r.nv, behov: v.r.behov }, kandidater: kandidater.map(x => x.id) };
+    return { nr, navn, krav, valg: { id: v.id, navn: v.navn, kort: v.kort, farge: v.farge, type: v.type, nv: v.r.nv, nvEtterRente: nvR(v.r), laan: v.r.laan ?? 0, behov: v.r.behov }, kandidater: kandidater.map(x => x.id) };
   };
   return [
     regel(1, "Robust", `Holder rammen nå og i ${scenarioer.length ? `alle ${scenarioer.length} scenarioene` : "alle scenarioene"}`, x => holder(x.r) && x.iAlle),
@@ -355,6 +386,7 @@ export function raadet(sesong, saler, program) {
     const bunnTid = naa.saldo ? naa.saldo.indexOf(Math.min(...naa.saldo)) : 0;
     return { id: x.id, navn: x.navn, kort: x.kort, farge: x.farge, type: x.type,
              nv: naa.nv, behov: naa.behov, netto: naa.netto ?? 0, nvLav: l.nv, behovLav: l.behov,
+             nvEtterRente: naa.nvEtterRente ?? naa.nv, laan: naa.laan ?? 0, rentekostnad: naa.rentekostnad ?? 0,
              holderNaa: holder(naa), holderLav: holder(l), tapteBilletter: tapte, fulleKonserter: fulle,
              leieFoerStart: naa.linjer ? -naa.linjer.leie[0] : 0, bunnTid, saldo: naa.saldo ?? null };
   });

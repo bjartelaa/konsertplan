@@ -867,6 +867,7 @@ body.chat-aapen .gaffarull { opacity: 0; pointer-events: none; transform: transl
   .undertekst { font-size: 13px; }
   .topp-hoyre { gap: 6px; }
   .topp-hoyre button { min-height: 32px; padding: 4px 11px; font-size: 14px; }
+  .anbefaling { grid-template-columns: 1fr; }   /* regelen over overstyrte mobilregelen, så bildet ble en smal stripe */
   .anb-bilde { min-height: 150px; }
   .seksjon h2.anb-tittel { font-size: 32px; }
   .anb-tekst { padding: 18px 18px; }
@@ -883,3 +884,30 @@ body.chat-aapen .gaffarull { opacity: 0; pointer-events: none; transform: transl
 .salvalg select { min-width: 17ch; }
 .program td.artist input { min-width: 15ch; }
 .oppsett-valg button[aria-pressed="true"] { background: var(--blekk); color: var(--papir); box-shadow: 0 1px 2px rgba(29, 36, 51, .25); }
+
+/* ---------- Tilbakemeldinger 17.11 ---------- */
+/* Tall ved hover på grafene */
+.figur .hover-sone { fill: transparent; cursor: crosshair; }
+.figur .hover-strek { stroke: var(--blekk); stroke-opacity: .35; stroke-width: 1.5; stroke-dasharray: 4 4; pointer-events: none; }
+.figur .hover-boks { pointer-events: none; }
+.figur .hover-bakgrunn { fill: var(--flate); stroke: var(--strek-sterk); filter: drop-shadow(0 2px 6px rgba(29, 36, 51, .18)); }
+.figur .hover-tittel { font-size: 14px; font-weight: 700; fill: var(--blekk); }
+.figur .hover-navn { font-size: 13.5px; fill: var(--blekk-svak); }
+.figur .hover-verdi { font-size: 14px; font-weight: 700; fill: var(--blekk); font-variant-numeric: tabular-nums; }
+.figur .hover-verdi.minus { fill: var(--minus); }
+/* Scenariovelgeren står over rådet, så den ikke flytter seg */
+body.fane-raadet .kontrollrad { margin: 18px 0 16px; }
+/* Nåverdi etter rente */
+.etter-rente { display: block; font-size: 12px; font-weight: 500; color: var(--blekk-svak); letter-spacing: 0; }
+/* Grensene forklart */
+.grense-forklaring { max-width: 80ch; display: grid; gap: 8px; margin: 4px 0 14px; font-size: 15px; }
+/* Lånemodulen */
+.laanmodul .ingress.synlig { max-width: 80ch; color: var(--blekk-svak); margin-bottom: 14px; }
+.laan-styring { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: flex-end; margin-bottom: 16px; }
+.laan-styring .felt { display: grid; gap: 4px; font-size: 14px; }
+.laan-styring .felt > span { color: var(--blekk-svak); }
+.laan-styring .chips { width: auto; }
+.laan-kort.i-bruk { outline: 2px solid var(--c); }
+.laan-kort h3 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.laanmodul .naa-linje { margin-top: 12px; }
+.stripe .nv-etikett.lang { display: block; margin: 2px 0 0; }
