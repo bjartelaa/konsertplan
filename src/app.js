@@ -32,8 +32,8 @@ const svg = (label) => { const e = document.createElementNS("http://www.w3.org/2
 /** Forklarende tekst som bare vises når bryteren «Forklaringer» er på. */
 const fork = (tag, cls, ...barn) => h(tag, { class: `${cls} forklaring-tekst` }, ...barn);
 
-const state = { data: null, fane: "raadet", referanse: "C", forklar: false, besteBlanding: null,
-                chat: { samtale: nySamtale(), logg: [], venter: false } };
+const state = { data: null, fane: "raadet", referanse: "C", forklar: false, besteBlanding: null, aapneTrekk: new Set(),
+                chatAapen: false, chat: { samtale: nySamtale(), logg: [], venter: false, utkast: "" } };
 
 function salAv(id) { return state.data.saler.find(s => s.id === id); }
 function salerPerKonsert() { return state.data.saler.filter(s => !s.kunHelSesong); }
@@ -73,10 +73,14 @@ function init() {
     visForklaringer();
   });
   const faner = [...document.querySelectorAll(".faner button")].map(b => b.dataset.fane);
-  const fraHash = () => { const f = location.hash.replace("#", ""); if (faner.includes(f) && f !== state.fane) { state.fane = f; render(); } };
+  // #spor er ikke lenger en fane, men åpner chatten (gamle lenker virker fortsatt)
+  const fraHash = () => { const f = location.hash.replace("#", ""); if (f === "spor") aapneChat(); else if (faner.includes(f) && f !== state.fane) { state.fane = f; render(); } };
   for (const b of document.querySelectorAll(".faner button")) b.addEventListener("click", () => { state.fane = b.dataset.fane; history.replaceState(null, "", "#" + state.fane); render(); });
   window.addEventListener("hashchange", fraHash);
   if (faner.includes(location.hash.replace("#", ""))) state.fane = location.hash.replace("#", "");
+  if (location.hash === "#spor") state.chatAapen = true;
+  document.getElementById("gaffarull").addEventListener("click", () => aapneChat());
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && state.chatAapen) lukkChat(); });
   // Åpnet fra presentasjonen (MET3): vis lenke tilbake. Maja ser den ikke
   if (new URLSearchParams(location.search).get("fra") === "presentasjon") {
     const tilbake = document.getElementById("til-presentasjon");
@@ -136,7 +140,8 @@ function render() {
   renderStripe(res);
   const main = document.getElementById("innhold");
   main.replaceChildren();
-  ({ raadet: renderRaadetFane, spor: renderSpor, program: renderProgram, resultater: renderResultater, saler: renderSaler, forutsetninger: renderForutsetninger })[state.fane](main, res);
+  ({ raadet: renderRaadetFane, program: renderProgram, resultater: renderResultater, saler: renderSaler, forutsetninger: renderForutsetninger })[state.fane](main, res);
+  renderChat();
 }
 
 function statusTekst(r) {
@@ -199,6 +204,25 @@ function leieType(sal) {
   return t ? t[0].toUpperCase() + t.slice(1) : "";
 }
 
+/** Utfellbar bolk på hjemskjermen. Hvilke som er åpne huskes mellom tegningene. */
+function trekk(id, tittel, under, ...innhold) {
+  return h("details", { class: "trekk", open: state.aapneTrekk.has(id), ontoggle: e => { if (e.target.open) state.aapneTrekk.add(id); else state.aapneTrekk.delete(id); } },
+    h("summary", {}, h("span", { class: "trekk-tittel" }, tittel), under ? h("span", { class: "trekk-under" }, under) : null),
+    h("div", { class: "trekk-innhold" }, ...innhold));
+}
+
+const klem = v => Math.max(0, Math.min(1, v));
+/** En liten måler under et nøkkeltall: fyll for verdien nå, rød sone der det går galt, strek for en grense. */
+function maaler({ tittel, stort, minus, under, fyll, fyll2, sone, strek, farge }) {
+  const skala = fyll == null ? null : h("div", { class: "maaler-skala", "aria-hidden": "true" },
+    fyll2 != null ? h("span", { class: "maaler-fyll svak-fyll", style: `width: ${klem(fyll2) * 100}%` }) : null,
+    h("span", { class: "maaler-fyll", style: `width: ${klem(fyll) * 100}%` }),
+    sone ? h("span", { class: "maaler-sone", style: `left: ${klem(sone[0]) * 100}%; width: ${(klem(sone[1]) - klem(sone[0])) * 100}%` }) : null,
+    strek != null ? h("span", { class: "maaler-strek", style: `left: ${klem(strek) * 100}%` }) : null);
+  return h("div", { class: "maaler", style: `--c: var(--${farge ?? "graa"})` },
+    h("h3", {}, tittel), h("div", { class: `maaler-tall tall${minus ? " minus" : ""}` }, stort), skala, h("p", { class: "maaler-under" }, ...[under].flat()));
+}
+
 function renderRaadetFane(main, res) {
   const d = state.data;
   const s = d.sesong;
@@ -212,6 +236,8 @@ function renderRaadetFane(main, res) {
   const alt = R.alle.filter(x => x.type !== "avstaa");
   const hoyest = alt.reduce((a, b) => (b.nv > a.nv ? b : a), alt[0]); // det regel 3 velger: høyest verdi uansett ramme
   const avstaar = v.type === "avstaa";
+  // Ved avstå forklares tallene med den som gir mest av dem som holder rammen nå, ellers den som gir mest
+  const x = avstaar ? (alt.filter(a => a.holderNaa).reduce((a, b) => (!a || b.nv > a.nv ? b : a), null) ?? hoyest) : v;
 
   /* 1 Anbefalingen med vilkår */
   const vilkaar = [];
@@ -219,7 +245,7 @@ function renderRaadetFane(main, res) {
   let tittel, under;
   if (avstaar) {
     tittel = "Ikke signer på disse vilkårene";
-    under = alt.every(x => x.nv <= 0) ? "Alle salene gir tap med forutsetningene nå. Det som kan snu det:"
+    under = alt.every(a => a.nv <= 0) ? "Alle salene gir tap med forutsetningene nå. Det som kan snu det:"
       : `Ingen av salene holder rammen på ${kr(ramme)} både med salget nå og hvis salget blir 20 % lavere. Det som kan snu det:`;
     if (R.snu.ramme?.status === "grense") vilkaar.push(`Skaff ${kr(R.snu.ramme.verdi)} i startfinansiering. Da holder ${navnMedKort(R.snu.ramme.til)} rammen også om salget blir 20 % lavere.`);
     vilkaar.push("Be Rigg & Ro om en lavere pakkepris før dere signerer.");
@@ -239,7 +265,7 @@ function renderRaadetFane(main, res) {
   }
   if (ramme != null && hoyest && hoyest.id !== v.id && hoyest.type === "sal" && !hoyest.holderNaa && hoyest.leieFoerStart > 0)
     spor.push(`${hoyest.navn}: kan noe av de ${kr(hoyest.leieFoerStart)} i leie som forfaller før januar, betales senere? ${hoyest.navn} gir mest, men trenger ${kr(hoyest.behov - ramme)} mer enn rammen.`);
-  if (!barTilSceneskift(s) && salV) spor.push(`${salV.navn}: får Sceneskift en del av barsalget? Casen regner ingen barinntekt (se nederst).`);
+  if (!barTilSceneskift(s) && salV) spor.push(`${salV.navn}: får Sceneskift en del av barsalget? Casen regner ingen barinntekt (se «Der vi går utenfor casen»).`);
 
   const kildeLenke = salV?.kilde ? h("div", { class: "kilde" }, "Bilde: ", h("a", { href: salV.kilde, target: "_blank", rel: "noopener" }, salV.kilde.replace(/^https?:\/\//, ""))) : null;
   main.append(h("section", { class: "seksjon anbefaling", style: `--c: var(--${v.farge ?? "graa"})` },
@@ -253,65 +279,117 @@ function renderRaadetFane(main, res) {
       spor.length ? h("div", { class: "anb-spor" }, h("h3", {}, "Verdt å spørre om"), h("ul", {}, ...spor.map(t => h("li", {}, t)))) : null),
     salV?.bilde ? h("div", { class: "anb-bilde" }, h("img", { src: salV.bilde, alt: `Bilde av ${salV.navn}` }), kildeLenke) : null));
 
+  /* 2 Scenario og spørsmål: rådet regnes på nytt med en gang */
+  main.append(h("section", { class: "kontrollrad", "aria-label": "Scenario" },
+    h("div", { class: "chips", role: "group", "aria-label": "Velg scenario" },
+      ...s.scenarioer.map(x2 => h("button", { type: "button", class: `chip${x2.oppside ? " oppside" : ""}`, "aria-pressed": String(x2 === sc), title: x2.begrunnelse,
+        onclick: () => { velgScenario(s, x2); oppdater(); } }, x2.navn)),
+      sc ? null : h("span", { class: "chip egne" }, "Egne verdier")),
+    h("div", { class: "kontroll-hoyre" },
+      h("button", { type: "button", class: "stille", onclick: () => gaaTil("resultater") }, "Finjuster i Resultater"),
+      h("button", { type: "button", class: "primaer", onclick: () => aapneChat() }, "Spør om rådet"))));
   const varsler = [utvidelserMerknad(), lokaleeffektMerknad(),
-    res.blandet ? h("p", { class: "varsel", style: "margin-top: 12px" }, h("span", { class: "merke varsel" }, "utenfor casen"), " Programmet blander saler. Casen sier at avtalene gjelder hele programmet, så egen plan er et forslag Maja kan ta opp, ikke et tilbud som finnes.") : null].filter(Boolean);
+    res.blandet ? h("p", { class: "varsel" }, h("span", { class: "merke varsel" }, "utenfor casen"), " Programmet blander saler. Casen sier at avtalene gjelder hele programmet, så egen plan er et forslag Maja kan ta opp, ikke et tilbud som finnes.") : null].filter(Boolean);
   main.append(h("div", { class: "gjelder" },
     h("p", { class: "naa-linje svak" }, "Gjelder ", h("b", {}, sc ? sc.navn.toLowerCase() : "egne verdier"), ": ",
       h("b", { class: "tall" }, `${pst(faktor)} av salget i 2026`), " og ", h("b", { class: "tall" }, `${kr(s.pakke)} per konsert`), ". ",
-      h("button", { type: "button", class: "stille liten", onclick: () => gaaTil("resultater") }, "Endre under Resultater"), " ",
-      h("button", { type: "button", class: "stille liten", onclick: () => gaaTil("spor") }, "Spør om rådet")),
-    h("p", { class: "naa-linje svak liten" }, `Regelen bak rådet, som i notatet: høyest verdi blant valgene som holder rammen både med salget nå og hvis salget blir 20 % lavere. Salget kan ikke rettes opp etter signering. Pakkeprisen kjenner Maja før hun signerer, derfor er den et vilkår.`),
+      "Regelen, som i notatet: høyest verdi blant valgene som holder rammen både med salget nå og hvis salget blir 20 % lavere."),
     ...varsler));
 
-  /* 2 Hvorfor: ett kort per valg */
-  const kortFor = x => {
-    const sal = x.type === "sal" ? salAv(x.id) : null;
-    const linjer = [];
-    if (ramme != null) {
-      if (!x.holderNaa) linjer.push(h("span", { class: "minus" }, `Trenger ${kr(x.behov - ramme)} mer enn rammen.`));
-      else if (!x.holderLav) linjer.push(`Holder rammen nå, men ikke hvis salget blir 20 % lavere (trenger da ${kr(x.behovLav)}).`);
-      else linjer.push(h("span", { class: "pluss" }, "Holder rammen, også hvis salget blir 20 % lavere."));
-    }
-    if (x.leieFoerStart > 0) linjer.push(`${kr(x.leieFoerStart)} i leie forfaller før første konsert.`);
-    if (x.fulleKonserter) linjer.push(`Full på ${x.fulleKonserter} ${x.fulleKonserter === 1 ? "konsert" : "konserter"}, ${tall(x.tapteBilletter)} billetter går tapt.`);
-    if (x.nvLav < 0) linjer.push(`Taper penger hvis salget blir 20 % lavere.`);
-    const over = ramme != null && x.behov > ramme;
-    return h("div", { class: `kort raad-kort${x.id === v.id ? " valgt" : ""}`, style: `--c: var(--${x.farge ?? "graa"})` },
-      h("h3", {}, sal ? mini(sal) : null, sal ? salTittel(sal) : x.navn,
-        x.type === "egen" ? h("span", { class: "merke varsel" }, "utenfor casen") : null,
-        x.id === v.id ? h("span", { class: "merke raad-merke" }, "vårt råd") : null),
-      sal ? h("p", { class: "liten svak leietype" }, leieType(sal)) : null,
-      h("div", { class: `stor ${x.nv < 0 ? "minus" : ""}` }, kr(x.nv)),
-      h("div", { class: "stor-etikett" }, "verdi for Sceneskift"),
-      h("dl", {},
-        h("dt", {}, "Må ha klart"), h("dd", { class: over ? "minus" : "" }, kr(x.behov)),
-        h("dt", {}, "Verdi om salget blir 20 % lavere"), h("dd", { class: x.nvLav < 0 ? "minus" : "" }, kr(x.nvLav))),
-      h("div", { class: "kort-linjer liten" }, ...linjer.map(l => h("div", {}, l))));
-  };
-  main.append(h("section", { class: "seksjon" },
-    h("h2", {}, avstaar ? "Hvorfor ingen av salene" : `Hvorfor ${v.type === "sal" ? v.navn : "egen plan"}`),
-    h("p", { class: "ingress" }, "Verdien er hva sesongen er verdt for Sceneskift, regnet i dagens kroner. «Må ha klart» er det laveste kontoen kommer i løpet av våren, altså startfinansieringen dere trenger. Begge er forklart under."),
-    h("div", { class: "kort-rad raad-kort-rad" }, ...alt.map(kortFor),
-      h("div", { class: `kort raad-kort avstaa-kort${avstaar ? " valgt" : ""}`, style: "--c: var(--graa)" },
-        h("h3", {}, "Avstå", avstaar ? h("span", { class: "merke raad-merke" }, "vårt råd") : null),
-        h("div", { class: "stor" }, kr(0)),
-        h("div", { class: "stor-etikett" }, "ingen risiko, ingen konserter"),
-        h("p", { class: "liten svak" }, "Planleggingen er betalt uansett, så den teller ikke med i noen av valgene.")))));
-
-  /* 3 To tall, forklart uten fagord */
-  // Ved avstå forklares tallene med den som gir mest av dem som holder rammen nå, ellers den som gir mest
-  const x = avstaar ? (alt.filter(a => a.holderNaa).reduce((a, b) => (!a || b.nv > a.nv ? b : a), null) ?? hoyest) : v;
+  /* 3 Nøkkeltallene for rådet, hver med en liten måler */
+  const fl = x?.farge ?? "graa";
+  const kortNavn = a => a.kort ?? a.navn;
+  const fliser = [];
   if (x) {
-    const T = (x.saldo?.length ?? 1) - 1;
-    const forklarKort = (tittel, stort, etikett, fagord, ...tekst) => h("div", { class: "forklar-kort" },
-      h("h3", {}, tittel), h("div", { class: `stor tall ${stort < 0 ? "minus" : ""}` }, kr(stort)), h("div", { class: "stor-etikett" }, etikett),
-      ...tekst.map(t => h("p", {}, t)), h("p", { class: "liten svak" }, fagord));
+    const maks = Math.max(...alt.map(a => a.nv), 1);
+    fliser.push(maaler({ tittel: avstaar ? `Verdi for Sceneskift, ${x.navn}` : "Verdi for Sceneskift", stort: kr(x.nv), minus: x.nv < 0, farge: fl,
+      fyll: Math.max(0, x.nv) / maks, strek: hoyest && hoyest.id !== x.id ? Math.max(0, hoyest.nv) / maks : null,
+      under: [`${kr(x.nvLav)} hvis salget blir 20 % lavere.`,
+        hoyest && hoyest.id !== x.id ? ` ${kortNavn(hoyest)} gir mest (streken), ${kr(hoyest.nv)}, men holder ikke rammen${hoyest.holderNaa ? " hvis salget blir 20 % lavere" : ""}.` : ""] }));
+    if (ramme != null) {
+      const topp = Math.max(ramme, x.behovLav, x.behov) * 1.08;
+      const over = x.behov > ramme;
+      fliser.push(maaler({ tittel: "Må ha klart", stort: kr(x.behov), minus: over, farge: fl,
+        fyll: x.behov / topp, fyll2: x.behovLav / topp, strek: ramme / topp, sone: [ramme / topp, 1],
+        under: [over ? h("span", { class: "minus" }, `${kr(x.behov - ramme)} over rammen på ${kr(ramme)}.`) : `${kr(ramme - x.behov)} å gå på under rammen på ${kr(ramme)} (streken).`,
+          ` ${kr(x.behovLav)} hvis salget blir 20 % lavere (lys del).`] }));
+    }
+  }
+  if (!avstaar && R.grense) {
+    const g = R.grense;
+    const nvg = g.nvNegativUnder, rg = g.overRammenUnder, pl = g.pakkeLav;
+    if (nvg.status === "grense") {
+      const topp = Math.max(1.2, faktor * 1.1);
+      fliser.push(maaler({ tittel: "Salget kan falle til", stort: pst1(nvg.verdi), farge: fl, minus: nvg.verdi > faktor,
+        fyll: faktor / topp, sone: [0, nvg.verdi / topp], strek: rg.status === "grense" && ramme != null ? rg.verdi / topp : null,
+        under: [`av salget i 2026 før sesongen gir tap (rødt). Nå: ${pst(faktor)}.`,
+          rg.status === "grense" && ramme != null ? ` Pengene strekker ikke til under ${pst1(rg.verdi)} (streken).` : ""] }));
+    }
+    if (pl?.status === "grense") {
+      const topp = Math.max(pl.verdi, s.pakke) * 1.15;
+      fliser.push(maaler({ tittel: "Pakkeprisen må holde seg under", stort: kr(pl.verdi), farge: fl, minus: s.pakke > pl.verdi,
+        fyll: s.pakke / topp, strek: pl.verdi / topp, sone: [pl.verdi / topp, 1],
+        under: `så holder ${v.navn} rammen også om salget blir 20 % lavere. Nå: ${kr(s.pakke)} per konsert.` }));
+    }
+  } else if (avstaar && R.snu.ramme?.status === "grense") {
+    fliser.push(maaler({ tittel: "Startfinansiering som snur rådet", stort: kr(R.snu.ramme.verdi), farge: R.snu.ramme.til?.farge,
+      under: `Da blir ${navnMedKort(R.snu.ramme.til)} rådet. Rammen nå er ${kr(ramme)}.` }));
+  }
+  if (fliser.length) main.append(h("section", { class: "maalere", "aria-label": "Nøkkeltall for rådet" }, ...fliser));
+
+  /* 4 Kontoen måned for måned, og alle valgene ved siden av */
+  const flate = h("div", { class: "oversikt" });
+  if (x) {
     const figur = svg("Kontoen ved slutten av hver måned");
     const serier = [{ navn: x.kort ?? x.navn, farge: x.farge ?? "graa", verdier: x.saldo ?? [], bred: true }];
     const annen = hoyest && hoyest.id !== x.id && hoyest.saldo ? hoyest : null;
     if (annen) serier.push({ navn: annen.kort ?? annen.navn, farge: annen.farge ?? "graa", verdier: annen.saldo });
-    main.append(h("section", { class: "seksjon" },
-      h("h2", {}, "To tall, forklart uten fagord"),
+    flate.append(h("div", { class: "figur raad-figur" }, h("h3", {}, "Kontoen ved slutten av hver måned"),
+      h("div", { class: "forklaring" }, ...serier.map(sr => h("span", { style: `--c: var(--${sr.farge})` }, sr.navn === serier[0].navn ? x.navn : `${annen.navn}, gir mest`))),
+      figur,
+      h("p", { class: "liten svak" }, `Det laveste punktet er det dere må ha klart: ${kr(x.behov)} ${mnd(x.bunnTid)}. Den stiplede streken er rammen.`)));
+    tegnSaldo(figur, serier, (x.saldo ?? []).map((_, t) => MAANEDER[t] ?? `M${t}`), ramme);
+  }
+  const radFor = a => {
+    const sal = a.type === "sal" ? salAv(a.id) : null;
+    const linjer = [];
+    if (ramme != null) {
+      if (!a.holderNaa) linjer.push(h("span", { class: "minus" }, `Trenger ${kr(a.behov - ramme)} mer enn rammen.`));
+      else if (!a.holderLav) linjer.push(h("span", {}, `Holder rammen nå, men ikke hvis salget blir 20 % lavere (trenger da ${kr(a.behovLav)}).`));
+      else linjer.push(h("span", { class: "pluss" }, "Holder rammen, også hvis salget blir 20 % lavere."));
+    }
+    if (a.leieFoerStart > 0) linjer.push(h("span", {}, `${kr(a.leieFoerStart)} i leie forfaller før første konsert.`));
+    if (a.fulleKonserter) linjer.push(h("span", {}, `Full på ${a.fulleKonserter} ${a.fulleKonserter === 1 ? "konsert" : "konserter"}, ${tall(a.tapteBilletter)} billetter går tapt.`));
+    if (a.nvLav < 0) linjer.push(h("span", {}, "Taper penger hvis salget blir 20 % lavere."));
+    return h("li", { class: `valg-rad${a.id === v.id ? " valgt" : ""}`, style: `--c: var(--${a.farge ?? "graa"})` },
+      h("div", { class: "valg-navn" }, sal ? mini(sal) : h("span", { class: "prikk" }), h("span", {}, sal ? salTittel(sal) : a.navn),
+        a.type === "egen" ? h("span", { class: "merke varsel" }, "utenfor casen") : null,
+        a.id === v.id ? h("span", { class: "merke raad-merke" }, "vårt råd") : null),
+      h("div", { class: "valg-tall" },
+        h("span", {}, h("b", { class: `tall${a.nv < 0 ? " minus" : ""}` }, kr(a.nv)), h("small", {}, "verdi")),
+        h("span", {}, h("b", { class: `tall${ramme != null && a.behov > ramme ? " minus" : ""}` }, kr(a.behov)), h("small", {}, "må ha klart"))),
+      sal ? h("p", { class: "valg-leie" }, leieType(sal)) : null,
+      h("p", { class: "valg-linjer" }, ...linjer.flatMap((l, i) => (i ? [" ", l] : [l]))));
+  };
+  flate.append(h("div", { class: "valgliste" },
+    h("h3", {}, avstaar ? "Hvorfor ingen av salene" : `Hvorfor ${v.type === "sal" ? v.navn : "egen plan"}`),
+    h("ol", {}, ...alt.map(radFor),
+      h("li", { class: `valg-rad avstaa${avstaar ? " valgt" : ""}`, style: "--c: var(--graa)" },
+        h("div", { class: "valg-navn" }, h("span", { class: "prikk" }), h("span", {}, "Avstå"), avstaar ? h("span", { class: "merke raad-merke" }, "vårt råd") : null),
+        h("div", { class: "valg-tall" }, h("span", {}, h("b", { class: "tall" }, kr(0)), h("small", {}, "verdi"))),
+        h("p", { class: "valg-linjer" }, "Ingen risiko, ingen konserter. Planleggingen er betalt uansett.")))));
+  main.append(flate);
+
+  /* 5 Mer om rådet: utfellbart, så hjemskjermen holder seg kort */
+  const mer = h("div", { class: "trekk-liste" });
+
+  // To tall, forklart uten fagord
+  if (x) {
+    const T = (x.saldo?.length ?? 1) - 1;
+    const forklarKort = (tittel2, stort, etikett, fagord, ...tekst) => h("div", { class: "forklar-kort" },
+      h("h3", {}, tittel2), h("div", { class: `stor tall ${stort < 0 ? "minus" : ""}` }, kr(stort)), h("div", { class: "stor-etikett" }, etikett),
+      ...tekst.map(t => h("p", {}, t)), h("p", { class: "liten svak" }, fagord));
+    mer.append(trekk("tall", "To tall, forklart uten fagord", "Hva verdien og «må ha klart» betyr",
       h("div", { class: "forklar-rad" },
         forklarKort("Hva sesongen er verdt", x.nv, `${x.navn}, i dagens kroner`, "I Resultater og arbeidsboka heter dette nåverdi.",
           `Alt som kommer inn minus alt som går ut, fra nå til det siste oppgjøret ${mnd(T)}. For ${x.navn} er det ${kr(x.netto)} mer inn enn ut.`,
@@ -320,19 +398,14 @@ function renderRaadetFane(main, res) {
         forklarKort("Hvor mye dere må ha klart", x.behov, `${x.navn}, det laveste kontoen kommer`, "I Resultater og arbeidsboka heter dette finansieringsbehov.",
           "Dere betaler før billettpengene kommer. Halve pakken går ut måneden før konserten, mens billettselskapet betaler måneden etter. Derfor går kontoen i minus i starten av våren.",
           `Det laveste punktet er det dere må ha klart: ${kr(x.behov)} ${mnd(x.bunnTid)}.${ramme != null ? ` Rammen er ${kr(ramme)}.` : ""}`,
-          "Tallene gjelder ved slutten av hver måned. Inne i måneden kan kontoen ligge lavere, så ha en buffer.")),
-      h("div", { class: "figur raad-figur" }, h("h3", {}, "Kontoen ved slutten av hver måned"),
-        h("div", { class: "forklaring" }, ...serier.map(sr => h("span", { style: `--c: var(--${sr.farge})` }, sr.navn === x.kort ? `${x.navn}` : `${annen.navn}, gir mest`))),
-        figur)));
-    tegnSaldo(figur, serier, (x.saldo ?? []).map((_, t) => MAANEDER[t] ?? `M${t}`), ramme);
+          "Tallene gjelder ved slutten av hver måned. Inne i måneden kan kontoen ligge lavere, så ha en buffer."))));
   }
 
-  /* 4 Når snur rådet */
+  // Når snur rådet
   if (!avstaar && R.grense) {
     const g = R.grense;
-    const sumSalg = d.program.reduce((a, k) => a + (k.forventetSalg ?? 0), 0);
-    const snuKort = (stort, tittel, tekst, minus) => h("div", { class: "kort snu-kort", style: `--c: var(--${v.farge ?? "graa"})` },
-      h("h3", {}, tittel), h("div", { class: `stor ${minus ? "minus" : ""}` }, stort), h("p", { class: "liten" }, tekst));
+    const snuKort = (stort, tittel2, tekst, minus) => h("div", { class: "kort snu-kort", style: `--c: var(--${v.farge ?? "graa"})` },
+      h("h3", {}, tittel2), h("div", { class: `stor ${minus ? "minus" : ""}` }, stort), h("p", { class: "liten" }, tekst));
     const kortene = [];
     const nvg = g.nvNegativUnder;
     if (nvg.status === "grense") kortene.push(snuKort(pst1(nvg.verdi), "Salget der sesongen gir tap",
@@ -346,14 +419,13 @@ function renderRaadetFane(main, res) {
       `Hvis salget blir 20 % lavere, holder ${v.navn} rammen bare med pakke under dette.${g.pakkeOverRammen.status === "grense" ? ` Med salget nå er grensen ${kr(g.pakkeOverRammen.verdi)}.` : ""}`, pl.verdi < s.pakke));
     if (R.snu.ramme?.status === "grense") kortene.push(snuKort(kr(R.snu.ramme.verdi), "Startfinansieringen som gir et annet råd",
       `Kan dere skaffe så mye, blir ${navnMedKort(R.snu.ramme.til)} rådet. Den gir mer, og holder da rammen også om salget blir 20 % lavere.`));
-    main.append(h("section", { class: "seksjon" },
-      h("h2", {}, "Når snur rådet"),
+    mer.append(trekk("snu", "Når snur rådet", R.snu.ramme?.status === "grense" ? `Blant annet med ${kr(R.snu.ramme.verdi)} i startfinansiering` : "Grensene for salget og pakkeprisen",
       h("p", { class: "ingress" }, `Det er salget og pakkeprisen som avgjør. Grensene under gjelder ${v.navn}, med de andre forutsetningene som nå. Salget er målt mot salget i 2026, konsert for konsert.`),
       h("div", { class: "kort-rad" }, ...kortene),
       h("p", { style: "margin-top: 12px" }, h("button", { type: "button", class: "stille", onclick: () => gaaTil("resultater") }, "Grensene for alle salene og alle scenarioene står i Resultater"))));
   }
 
-  /* 5 Artisten bestemmer salen (praksisvinkelen) */
+  // Artisten bestemmer salen (praksisvinkelen)
   const bb = besteBlanding(s, d.saler, d.program);
   const lokaler = [...new Set(d.program.map(k => k.i2026?.lokale).filter(Boolean))];
   let i2026 = "";
@@ -364,12 +436,10 @@ function renderRaadetFane(main, res) {
     const ord = n => ["null", "én", "to", "tre", "fire", "fem", "seks", "sju", "åtte", "ni", "ti", "elleve", "tolv"][n] ?? String(n);
     if (liten) i2026 = ` I 2026 gikk de ${ord(liten.ks.length)} minste konsertene i ${liten.navn} og de ${ord(stor.ks.length)} største i ${stor.navn}.`;
   }
-  const artistSek = h("section", { class: "seksjon" },
-    h("h2", {}, "Artisten bestemmer salen"),
-    h("p", { class: "ingress" }, `I casen går alle konsertene i samme sal, og Maja regner med samme salg som i fjor uansett sal. I praksis er det artisten dere booker, og hva dere booker dem til, som avgjør hvor mange som kjøper billett. En solist på en sittende låtskriverkveld og et band på en stående klubbkveld trenger ikke samme rom. Salget avgjør så hvilken sal som lønner seg.${i2026}`));
+  const artist = [h("p", { class: "ingress" }, `I casen går alle konsertene i samme sal, og Maja regner med samme salg som i fjor uansett sal. I praksis er det artisten dere booker, og hva dere booker dem til, som avgjør hvor mange som kjøper billett. En solist på en sittende låtskriverkveld og et band på en stående klubbkveld trenger ikke samme rom. Salget avgjør så hvilken sal som lønner seg.${i2026}`)];
   if (bb) {
     const ref = v.type === "sal" ? v : alt.filter(a => a.type === "sal" && a.holderNaa).reduce((a, b) => (!a || b.nv > a.nv ? b : a), null);
-    const perSal = [...new Set(bb.valg.map(x => x.salId))].map(id => ({ sal: salAv(id), ks: d.program.filter((k, i) => bb.valg[i].salId === id) }));
+    const perSal = [...new Set(bb.valg.map(y => y.salId))].map(id => ({ sal: salAv(id), ks: d.program.filter((k, i) => bb.valg[i].salId === id) }));
     // Når fast leie per konsert slår leie som følger salget: der leien i den ene salen blir lik den faste i den andre
     let skille = null;
     const fastSal = perSal.map(p => p.sal).find(sl => sl?.leie?.length === 1 && sl.leie[0].type === "perKonsert");
@@ -379,7 +449,7 @@ function renderRaadetFane(main, res) {
       if ((a.minimum ?? 0) < F && a.andel > 0) skille = `Fast leie i ${fastSal.navn} (${kr(F)}) er billigere enn ${pst(a.andel)} av oppgjøret i ${andelSal.navn} når en konsert selger mer enn ${tall(Math.floor(F / (a.andel * netto)))} billetter. Men ${fastSal.navn} har bare ${tall(Math.max(kapasitet(fastSal, "staa") ?? 0, kapasitet(fastSal, "sitte") ?? 0))} plasser, så den passer for konsertene i midten.`;
     }
     const liste = a => (a.length > 1 ? `${a.slice(0, -1).join(", ")} og ${a[a.length - 1]}` : a.join(""));
-    artistSek.append(
+    artist.push(
       h("div", { class: "blanding" }, ...d.program.map((k, i) => { const sl = salAv(bb.valg[i].salId); return h("div", { class: "blanding-konsert", style: `--c: var(--${fargeFor(sl)})`, title: `${k.artist}: ${tall((k.forventetSalg ?? 0) * faktor)} forventet` },
         h("span", { class: "blanding-nr" }, String(k.nr)), h("span", { class: "blanding-sal" }, sl?.kort ?? sl?.navn), h("span", { class: "blanding-artist" }, k.artist),
         h("span", { class: "blanding-salg tall" }, `${tall((k.forventetSalg ?? 0) * faktor)} solgt`)); })),
@@ -389,9 +459,9 @@ function renderRaadetFane(main, res) {
         bb.holderRammen ? "" : " Den holder ikke rammen."),
       h("p", { class: "varsel", style: "margin-top: 12px" }, h("span", { class: "merke varsel" }, "utenfor casen"), " Det krever at utleierne godtar enkeltkonserter. Casen sier at avtalene gjelder hele programmet, så dette er noe Maja kan spørre om, ikke et tilbud som finnes. Programmet viser forslaget per konsert, og knappen «Beste blanding» legger det inn."));
   }
-  main.append(artistSek);
+  mer.append(trekk("artist", "Artisten bestemmer salen", bb ? `Beste blanding gir ${kr(bb.nv)} i verdi` : "Praksisvinkelen", ...artist));
 
-  /* 6 Der vi går utenfor casen */
+  // Der vi går utenfor casen
   const tallInput = (felt, opt = {}) => h("input", { type: "number", min: 0, step: opt.step ?? 10, value: opt.pst ? Math.round((s[felt] ?? 0) * 1000) / 10 : (s[felt] ?? 0), "aria-label": opt.navn,
     onchange: e => { const verdi = Math.max(0, Number(e.target.value) || 0); s[felt] = opt.pst ? verdi / 100 : verdi; oppdater(); } });
   const nullKnapp = (...felt) => (felt.some(f => s[f]) ? h("button", { type: "button", class: "stille liten", onclick: () => { for (const f of felt) s[f] = 0; oppdater(); } }, "tilbake til 0") : null);
@@ -442,13 +512,14 @@ function renderRaadetFane(main, res) {
   // Inne i måneden
   rader.push(["Når i måneden pengene går", "Ved månedsslutt", h("div", { class: "utenfor-felt" }, "Ved månedsslutt"),
     "Rigg & Ro vil ha første halvdel den 1. i måneden før konserten, og Flytbillett betaler innen den 20. i måneden etter. Inne i måneden kan kontoen ligge lavere enn tallene her. Derfor rådet om buffer."]);
-
-  main.append(h("section", { class: "seksjon" },
-    h("h2", {}, "Der vi går utenfor casen"),
+  const iBruk = [barTilSceneskift(s), s.uforutsett, medAvvik, res.blandet, endretLokal.length].filter(Boolean).length;
+  mer.append(trekk("utenfor", "Der vi går utenfor casen", iBruk ? `${iBruk} tillegg i bruk nå` : "Alle tilleggene står på null, som i casen",
     h("p", { class: "ingress" }, "Oppgaveteksten sier: «Utover postene i tabellen og lokaleleien er det ingen andre inntekter eller kostnader.» I virkeligheten er det sjelden slik, og å utelate noe er å anta at det er null. Derfor står tilleggene på null, så tallene over er casens, og vi viser hva som skjer om de ikke er det."),
     h("div", { class: "tabellramme" }, h("table", { class: "utenfor" },
       h("thead", {}, h("tr", {}, h("th", {}, "Tillegg"), h("th", {}, "I casen"), h("th", {}, "Hos oss nå"), h("th", {}, "Hva det gjør med rådet"))),
       h("tbody", {}, ...rader.map(([t, c, n, e]) => h("tr", {}, h("td", { class: "utenfor-navn" }, t), h("td", { class: "svak" }, c), h("td", {}, n), h("td", { class: "liten" }, e))))))));
+
+  main.append(h("section", { class: "seksjon mer-om" }, h("h2", {}, "Mer om rådet"), mer));
 }
 
 /* ---------- Program ---------- */
@@ -888,24 +959,48 @@ function leggTilSal(mal) {
  * Språkmodellen forklarer, motoren regner (src/chat.js). Nøkkelen ligger bare i nettleserens lokale lager.
  * Samtalen ligger bare i minnet og forsvinner når siden lastes på nytt.
  */
-function renderSpor(main) {
+/** Chatpanelet glir inn fra høyre og kan åpnes fra alle fanene med gaffarullen nede til høyre. */
+function aapneChat() {
+  if (!state.chatAapen) { state.chatAapen = true; renderChat(true); }
+  else renderChat(true);
+}
+function lukkChat() {
+  state.chatAapen = false;
+  renderChat();
+  if (location.hash === "#spor") history.replaceState(null, "", "#" + state.fane);
+  document.getElementById("gaffarull").focus({ preventScroll: true });
+}
+
+function renderChat(fokus = false) {
+  const panel = document.getElementById("chatpanel");
+  const rull = document.getElementById("gaffarull");
   const c = state.chat;
+  panel.classList.toggle("aapen", state.chatAapen);
+  panel.inert = !state.chatAapen;
+  panel.setAttribute("aria-hidden", String(!state.chatAapen));
+  rull.setAttribute("aria-expanded", String(state.chatAapen));
+  document.body.classList.toggle("chat-aapen", state.chatAapen);
+  if (!state.chatAapen) return;
   const nokkel = lesNokkel();
-  main.append(h("section", { class: "seksjon spor" },
-    h("h2", {}, "Spør om rådet"),
-    h("p", { class: "ingress" }, "Still spørsmål med egne ord. Konsertplan regner, og en språkmodell (Claude fra Anthropic) forklarer svaret med tallene herfra. Spør du «hva om», prøver Konsertplan endringen uten å endre planen din. Vil du beholde den, trykker du «Bruk i planen»."),
-    nokkel ? chatFlate(c) : nokkelBoks()));
-  const logg = main.querySelector(".chat-logg");
+  panel.replaceChildren(
+    h("header", { class: "chatpanel-topp" },
+      h("div", {},
+        h("h2", { id: "chatpanel-tittel" }, "Spør om rådet"),
+        h("p", { class: "liten" }, "Konsertplan regner, Claude fra Anthropic forklarer. «Hva om» prøves uten å endre planen din.")),
+      h("button", { type: "button", class: "lukk", "aria-label": "Lukk", onclick: lukkChat }, "×")),
+    nokkel ? chatFlate(c) : nokkelBoks());
+  const logg = panel.querySelector(".chat-logg");
   if (logg) logg.scrollTop = logg.scrollHeight;
+  if (fokus) requestAnimationFrame(() => panel.querySelector("#chat-felt:not([disabled]), #chat-nokkel")?.focus({ preventScroll: true }));
 }
 
 function nokkelBoks() {
   const felt = h("input", { type: "password", id: "chat-nokkel", autocomplete: "off", spellcheck: "false", placeholder: "Lim inn nøkkelen her" });
-  const lagreN = () => { if (felt.value.trim()) { lagreNokkel(felt.value); render(); } };
+  const lagreN = () => { if (felt.value.trim()) { lagreNokkel(felt.value); renderChat(true); } };
   felt.addEventListener("keydown", e => { if (e.key === "Enter") lagreN(); });
   return h("div", { class: "chat-nokkel" },
     h("label", { for: "chat-nokkel" }, "Anthropic API-nøkkel"),
-    h("div", { class: "chat-nokkel-rad" }, felt, h("button", { type: "button", onclick: lagreN }, "Lagre i denne nettleseren")),
+    h("div", { class: "chat-nokkel-rad" }, felt, h("button", { type: "button", class: "primaer", onclick: lagreN }, "Lagre i denne nettleseren")),
     h("p", { class: "liten svak" }, "Nøkkelen lagres bare i nettleserens lokale lager på denne maskinen og sendes bare til Anthropic. Den er aldri med i «Lagre»-fila. Hvert spørsmål koster litt på kontoen nøkkelen tilhører, så sett gjerne en brukergrense på nøkkelen."));
 }
 
@@ -915,18 +1010,19 @@ function chatFlate(c) {
   if (!c.logg.length) logg.append(h("p", { class: "chat-tom svak" }, `Rådet nå: ${t.raadet.valg === "Avstå" ? "avstå" : t.raadet.valg}. Spør om hvorfor, eller om hva som skal til for at det snur.`));
   for (const m of c.logg) logg.append(chatMelding(m));
   if (c.venter) logg.append(h("div", { class: "chat-melding bot venter" }, h("span", { class: "svak" }, "Konsertplan regner og skriver svar")));
-  const felt = h("textarea", { id: "chat-felt", rows: "2", placeholder: "Skriv et spørsmål, for eksempel: Hva om vi bare selger 85 %?", disabled: c.venter });
-  const send = tekst => { tekst = (tekst ?? felt.value).trim(); if (tekst && !c.venter) sporModellen(tekst); };
+  const felt = h("textarea", { id: "chat-felt", rows: "2", placeholder: "Skriv et spørsmål, for eksempel: Hva om vi bare selger 85 %?", disabled: c.venter, "aria-label": "Spørsmål" });
+  felt.value = c.utkast ?? "";
+  felt.addEventListener("input", () => { c.utkast = felt.value; });
+  const send = tekst => { tekst = (tekst ?? felt.value).trim(); if (tekst && !c.venter) { c.utkast = ""; sporModellen(tekst); } };
   felt.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
-  if (!c.venter) requestAnimationFrame(() => felt.focus({ preventScroll: true }));
   return h("div", { class: "chat" },
     logg,
     c.venter ? null : h("div", { class: "chat-forslag" }, ...chatForslag(t).map(f => h("button", { type: "button", class: "forslag-knapp", onclick: () => send(f) }, f))),
     h("form", { class: "chat-skjema", onsubmit: e => { e.preventDefault(); send(); } },
-      felt, h("button", { type: "submit", disabled: c.venter }, "Spør")),
+      felt, h("button", { type: "submit", class: "primaer", disabled: c.venter }, "Spør")),
     h("p", { class: "liten svak chat-bunn" }, "Nøkkelen er lagret i denne nettleseren. ",
-      h("button", { type: "button", class: "stille liten", onclick: () => { glemNokkel(); render(); } }, "Glem nøkkelen"), " ",
-      c.logg.length ? h("button", { type: "button", class: "stille liten", disabled: c.venter, onclick: () => { state.chat = { samtale: nySamtale(), logg: [], venter: false }; render(); } }, "Tøm samtalen") : null));
+      h("button", { type: "button", class: "stille liten", onclick: () => { glemNokkel(); renderChat(true); } }, "Glem nøkkelen"), " ",
+      c.logg.length ? h("button", { type: "button", class: "stille liten", disabled: c.venter, onclick: () => { state.chat = { samtale: nySamtale(), logg: [], venter: false, utkast: "" }; renderChat(true); } }, "Tøm samtalen") : null));
 }
 
 function chatMelding(m) {
@@ -966,7 +1062,7 @@ async function sporModellen(tekst) {
   const nokkel = lesNokkel();
   c.logg.push({ rolle: "maja", tekst });
   c.venter = true;
-  render();
+  renderChat();
   try {
     const svar = await spor(c.samtale, state.data, tekst, lagKall(nokkel));
     c.logg.push({ rolle: "bot", ...svar });
@@ -974,7 +1070,7 @@ async function sporModellen(tekst) {
     c.logg.push({ rolle: "feil", tekst: e.message || "Noe gikk galt." });
   } finally {
     c.venter = false;
-    if (state.chat === c) render();
+    if (state.chat === c) renderChat(true);
   }
 }
 

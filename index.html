@@ -29,7 +29,6 @@
   </header>
   <nav class="faner" aria-label="Deler av verktøyet">
     <button type="button" data-fane="raadet" aria-pressed="true">Rådet</button>
-    <button type="button" data-fane="spor">Spør</button>
     <button type="button" data-fane="program">Program</button>
     <button type="button" data-fane="resultater">Resultater</button>
     <button type="button" data-fane="saler">Saler</button>
@@ -40,6 +39,21 @@
 <section class="stripe" id="stripe" aria-label="Resultatene akkurat nå"></section>
 
 <main id="innhold"></main>
+
+<button type="button" id="gaffarull" class="gaffarull" aria-expanded="false" aria-controls="chatpanel">
+  <svg class="rull" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+    <circle cx="50" cy="50" r="46" fill="#1c1c1b"/>
+    <circle cx="50" cy="50" r="46" fill="none" stroke="#3a3a38" stroke-width="1.5"/>
+    <circle cx="50" cy="50" r="38" fill="none" stroke="#2a2a29" stroke-width="1"/>
+    <circle cx="50" cy="50" r="31" fill="none" stroke="#2a2a29" stroke-width="1"/>
+    <path d="M18 34 A36 36 0 0 1 44 15" fill="none" stroke="#ffffff" stroke-opacity=".18" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="50" cy="50" r="23" fill="#c9a26a"/>
+    <circle cx="50" cy="50" r="23" fill="none" stroke="#a9834d" stroke-width="2"/>
+    <circle cx="50" cy="50" r="16" fill="#efe9dc"/>
+  </svg>
+  <span class="teip">Spør</span>
+</button>
+<aside id="chatpanel" class="chatpanel" aria-labelledby="chatpanel-tittel" aria-hidden="true" inert></aside>
 
 <footer class="bunn">
   <p>Konsertplan er laget til MET3 Arbeidskrav 2 ved NHH (Bjarte Laa, Petter Garli og Maxime Boudailliez). Sceneskift, salene og tallene er fiktive og laget for undervisning. Alt regnes i nettleseren og lagres bare på denne maskinen.</p>
