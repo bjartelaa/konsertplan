@@ -129,6 +129,7 @@ function init() {
     else tilbake.addEventListener("click", e => { if (history.length > 1) { e.preventDefault(); history.back(); } });
   }
   visForklaringer();
+  settOppSidemeny();
   render();
 }
 
@@ -179,6 +180,8 @@ function render() {
   const main = document.getElementById("innhold");
   main.replaceChildren();
   ({ raadet: renderRaadetFane, program: renderProgram, resultater: renderResultater, saler: renderSaler, forutsetninger: renderForutsetninger })[state.fane](main, res);
+  renderSidemeny();
+  oppdaterKompaktStripe();
   renderChat();
 }
 
@@ -218,6 +221,78 @@ function renderStripe(res) {
     h("div", { class: "navn" }, "Avstå"),
     h("div", { class: "nv tall" }, kr(0)),
     h("div", { class: "rad" }, "Ingen risiko, ingen inntekt")));
+
+  // Kompakt linje som glir inn øverst når stripa er rullet bort: navn, nåverdi og om rammen holder. Avstå (alltid 0) er utelatt
+  const kompakt = document.getElementById("stripe-kompakt");
+  const rammeKort = r => s.ramme == null ? null : r.behov <= s.ramme
+    ? h("span", { class: "k-status pluss" }, "holder rammen")
+    : h("span", { class: "k-status minus" }, `${kr(r.behov - s.ramme)} over rammen`);
+  kompakt.replaceChildren(
+    ...deler.map(p => h("div", { class: "k-del", style: `--c: var(--${p.farge})` },
+      h("span", { class: "k-navn" }, p.navn.replace(/^Alt i /, "")),
+      h("b", { class: `k-nv tall ${nvVist(p.r) < 0 ? "minus" : ""}` }, kr(nvVist(p.r))),
+      rammeKort(p.r))));
+}
+
+/**
+ * Viser den kompakte stripa når mindre enn ca. 64 px av den store er igjen, så den dekker resten.
+ * Sjekkes ved hver rulling og etter hver tegning (ikke IntersectionObserver: et hopp fra en fane uten stripe gir ingen overgang å se).
+ */
+function oppdaterKompaktStripe() {
+  const stripe = document.getElementById("stripe");
+  const r = stripe.getBoundingClientRect();
+  document.body.classList.toggle("stripe-kompakt-vis", r.height > 0 && r.bottom < 64);
+}
+
+/* ---------- Sidemeny: hoppeknapper til venstre ---------- */
+// Menyen bygges fra elementer i fanen med data-meny (teksten) og id. data-niva="2" gir et innrykket punkt.
+// Elementene tegnes på nytt når gliderne flyttes, så menyen slår opp på id hver gang.
+const FANER_MED_MENY = new Set(["resultater", "raadet", "forutsetninger"]);
+const myk = () => (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
+function renderSidemeny() {
+  const nav = document.getElementById("sidemeny");
+  const punkter = FANER_MED_MENY.has(state.fane) ? [...document.querySelectorAll("#innhold [data-meny][id]")] : [];
+  document.body.classList.toggle("har-meny", punkter.length > 0);
+  nav.hidden = !punkter.length;
+  nav.replaceChildren();
+  if (!punkter.length) return;
+  const hopp = id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.tagName === "DETAILS" && !el.open) el.open = true;
+    el.scrollIntoView({ behavior: myk(), block: "start" });
+  };
+  nav.append(h("ol", {},
+    ...punkter.map(el => h("li", { class: el.dataset.niva === "2" ? "niva-2" : "" },
+      h("button", { type: "button", "data-til": el.id, onclick: () => hopp(el.id) }, el.dataset.meny))),
+    h("li", { class: "til-toppen" }, h("button", { type: "button", onclick: () => window.scrollTo({ top: 0, behavior: myk() }) }, "↑ Til toppen"))));
+  markerSidemeny();
+}
+
+/** Markerer delen du er i: den siste som har passert øvre kant, eller den siste når siden er rullet til bunnen. */
+function markerSidemeny() {
+  const knapper = [...document.querySelectorAll("#sidemeny [data-til]")];
+  if (!knapper.length) return;
+  const kant = (parseFloat(getComputedStyle(document.body).getPropertyValue("--meny-topp")) || 72) + 60;
+  let aktiv = knapper[0];
+  for (const k of knapper) {
+    const el = document.getElementById(k.dataset.til);
+    if (el && el.getBoundingClientRect().top <= kant) aktiv = k;
+  }
+  if (window.scrollY > 0 && window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) aktiv = knapper[knapper.length - 1];
+  for (const k of knapper) {
+    if (k === aktiv) k.setAttribute("aria-current", "true"); else k.removeAttribute("aria-current");
+  }
+}
+
+function settOppSidemeny() {
+  let venter = false;
+  window.addEventListener("scroll", () => {
+    if (venter) return;
+    venter = true;
+    requestAnimationFrame(() => { venter = false; oppdaterKompaktStripe(); markerSidemeny(); });
+  }, { passive: true });
+  window.addEventListener("resize", () => { oppdaterKompaktStripe(); markerSidemeny(); });
 }
 
 /* ---------- Rådet ---------- */
@@ -249,7 +324,7 @@ function leieType(sal) {
 
 /** Utfellbar bolk på hjemskjermen. Hvilke som er åpne huskes mellom tegningene. */
 function trekk(id, tittel, under, ...innhold) {
-  return h("details", { class: "trekk", open: state.aapneTrekk.has(id), ontoggle: e => { if (e.target.open) state.aapneTrekk.add(id); else state.aapneTrekk.delete(id); } },
+  return h("details", { class: "trekk", id: `trekk-${id}`, "data-meny": tittel, "data-niva": "2", open: state.aapneTrekk.has(id), ontoggle: e => { if (e.target.open) state.aapneTrekk.add(id); else state.aapneTrekk.delete(id); } },
     h("summary", {}, h("span", { class: "trekk-tittel" }, tittel), under ? h("span", { class: "trekk-under" }, under) : null),
     h("div", { class: "trekk-innhold" }, ...innhold));
 }
@@ -320,7 +395,7 @@ function renderRaadetFane(main, res) {
       h("button", { type: "button", class: "stille", onclick: () => gaaTil("resultater", "finjuster") }, "Finjuster i Resultater"),
       h("button", { type: "button", class: "primaer", onclick: () => aapneChat() }, "Spør om rådet"))));
   const kildeLenke = salV?.kilde ? h("div", { class: "kilde" }, "Bilde: ", h("a", { href: salV.kilde, target: "_blank", rel: "noopener" }, salV.kilde.replace(/^https?:\/\//, ""))) : null;
-  main.append(h("section", { class: "seksjon anbefaling", style: `--c: var(--${v.farge ?? "graa"})` },
+  main.append(h("section", { class: "seksjon anbefaling", id: "anb-raad", "data-meny": "Rådet", style: `--c: var(--${v.farge ?? "graa"})` },
     h("div", { class: "anb-tekst" },
       h("p", { class: "anb-over" }, "Vårt råd til Maja"),
       h("h2", { class: "anb-tittel" }, tittel, v.type === "egen" ? h("span", { class: "merke varsel" }, "utenfor casen") : null),
@@ -378,10 +453,10 @@ function renderRaadetFane(main, res) {
     fliser.push(maaler({ tittel: "Startfinansiering som snur rådet", stort: kr(R.snu.ramme.verdi), farge: R.snu.ramme.til?.farge,
       under: `Da blir ${navnMedKort(R.snu.ramme.til)} rådet. Rammen nå er ${kr(ramme)}.` }));
   }
-  if (fliser.length) main.append(h("section", { class: "maalere", "aria-label": "Nøkkeltall for rådet" }, ...fliser));
+  if (fliser.length) main.append(h("section", { class: "maalere", id: "anb-tall", "data-meny": "Nøkkeltall", "aria-label": "Nøkkeltall for rådet" }, ...fliser));
 
   /* 4 Kontoen måned for måned, og alle valgene ved siden av */
-  const flate = h("div", { class: "oversikt" });
+  const flate = h("div", { class: "oversikt", id: "anb-konto", "data-meny": "Kontoen og valgene" });
   if (x) {
     const figur = svg("Kontoen ved slutten av hver måned");
     const serier = [{ navn: x.kort ?? x.navn, farge: x.farge ?? "graa", verdier: x.saldo ?? [], bred: true }];
@@ -574,7 +649,7 @@ function renderRaadetFane(main, res) {
       h("thead", {}, h("tr", {}, h("th", {}, "Tillegg"), h("th", {}, "I casen"), h("th", {}, "Hos oss nå"), h("th", {}, "Hva det gjør med rådet"))),
       h("tbody", {}, ...rader.map(([t, c, n, e]) => h("tr", {}, h("td", { class: "utenfor-navn" }, t), h("td", { class: "svak" }, c), h("td", {}, n), h("td", { class: "liten" }, e))))))));
 
-  main.append(h("section", { class: "seksjon mer-om" }, h("h2", {}, "Mer om rådet"), mer));
+  main.append(h("section", { class: "seksjon mer-om", id: "anb-mer", "data-meny": "Mer om rådet" }, h("h2", {}, "Mer om rådet"), mer));
 }
 
 /* ---------- Program ---------- */
@@ -682,16 +757,15 @@ function renderResultater(main, res) {
   const d = state.data;
   const s = d.sesong;
 
-  // Gliderne bygges én gang og tegnes ikke på nytt mens du drar. Resten av fanen tegnes på nytt, throttlet.
+  // Kontrollpanelet (scenario og glidere) bygges én gang og tegnes ikke på nytt mens du drar.
+  // Resten av fanen (grafer, tabeller, reglene) tegnes på nytt, throttlet.
   const innhold = h("div", { id: "res-innhold" });
-  // «Hva snur rådet» ligger øverst og tegnes på nytt sammen med resten
-  const raadBoks = h("div", { id: "res-raad" });
   let venter = false;
   const oppdaterInnhold = () => {
     lagre();
     if (venter) return;
     venter = true;
-    requestAnimationFrame(() => { venter = false; const r = beregn(); renderStripe(r); tegnScenarioer(); raadBoks.replaceChildren(); fyllRaad(raadBoks); innhold.replaceChildren(); fyllResultater(innhold, r); });
+    requestAnimationFrame(() => { venter = false; const r = beregn(); renderStripe(r); tegnScenarioer(); innhold.replaceChildren(); fyllResultater(innhold, r); });
   };
   // Scenariovelgeren tegnes på nytt når gliderne flyttes, så den viser «Egne verdier» når ingen stemmer
   const scenarioBoks = h("div", { class: "scenarioer" });
@@ -708,12 +782,6 @@ function renderResultater(main, res) {
     begrunnelse.textContent = aktiv ? aktiv.begrunnelse : "Verdiene fra gliderne. Ingen av scenarioene i arbeidsboka stemmer akkurat med dem.";
   };
   tegnScenarioer();
-  main.append(raadBoks);
-  fyllRaad(raadBoks);
-  main.append(h("section", { class: "seksjon" },
-    h("h2", {}, "Scenario"),
-    fork("p", "ingress", "Ett scenario om gangen, som i arbeidsboka. Scenarioet setter etterspørselen i forhold til 2026 og pakkeprisen per konsert. Alt på siden regnes på nytt. Nivåene er gruppas antakelser, ikke sannsynligheter, og Høy etterspørsel er en oppside som ikke inngår i beslutningsreglene."),
-    scenarioBoks, begrunnelse));
   const glider = (navn, felt, min, max, steg, vis, basis) => {
     const inp = h("input", { type: "range", min, max, step: steg, value: s[felt], "aria-label": navn });
     const verdi = h("b", { class: "tall" });
@@ -726,12 +794,21 @@ function renderResultater(main, res) {
     tegn();
     return h("div", { class: "glider" }, h("label", {}, h("span", {}, navn), verdi), inp, h("div", { class: "ende" }, h("span", {}, vis(min)), h("span", {}, vis(max))));
   };
-  main.append(h("section", { class: "seksjon", id: "finjuster" },
-    h("h2", {}, "Finjuster: hva om salget eller pakkeprisen blir noe annet?"),
-    fork("p", "ingress", "Dra i gliderne for verdier mellom scenarioene. Alt på siden regnes på nytt. Basis er Majas premiss: samme salg som i 2026 og 60 000 kr per konsert."),
-    h("div", { class: "glidere" },
-      glider("Etterspørsel i forhold til 2026", "etterspoerselsfaktor", 0.5, 1.3, 0.01, pst, 1),
-      glider("Pakkepris per konsert", "pakke", 48000, 78000, 500, kr, 60000))));
+  // Kontrollpanel øverst: scenario til venstre, finjustering til høyre. Grafene kommer rett under,
+  // så de endrer seg i bildet mens gliderne flyttes.
+  main.append(h("section", { class: "seksjon kontrollpanel", id: "scenario", "data-meny": "Scenario" },
+    h("div", { class: "kontroll-scenario" },
+      h("h2", {}, "Scenario"),
+      h("p", { class: "under-tittel svak" }, "Velg ett. Alt på siden regnes på nytt."),
+      fork("p", "ingress", "Ett scenario om gangen, som i arbeidsboka. Scenarioet setter etterspørselen i forhold til 2026 og pakkeprisen per konsert. Alt på siden regnes på nytt. Nivåene er gruppas antakelser, ikke sannsynligheter, og Høy etterspørsel er en oppside som ikke inngår i beslutningsreglene."),
+      scenarioBoks, begrunnelse),
+    h("div", { class: "kontroll-finjuster", id: "finjuster" },
+      h("h2", {}, "Finjuster"),
+      h("p", { class: "under-tittel svak" }, "Hva om salget eller pakkeprisen blir noe annet?"),
+      fork("p", "ingress", "Dra i gliderne for verdier mellom scenarioene. Alt på siden regnes på nytt. Basis er Majas premiss: samme salg som i 2026 og 60 000 kr per konsert."),
+      h("div", { class: "glidere" },
+        glider("Etterspørsel i forhold til 2026", "etterspoerselsfaktor", 0.5, 1.3, 0.01, pst, 1),
+        glider("Pakkepris per konsert", "pakke", 48000, 78000, 500, kr, 60000)))));
   main.append(innhold);
   fyllResultater(innhold, res);
 }
@@ -747,7 +824,7 @@ function grenseForklaring(gr, s) {
     h("p", { class: "svak" }, "«Alltid» betyr at handlingen er på feil side uansett (for eksempel over rammen selv med fullt hus). «Aldri» betyr at grensen ikke finnes. I arbeidsboka er det samme regnet med datatabeller i arket Usikkerhet."));
 }
 
-/** Øverst i Resultater: de tre beslutningsreglene og grensene der rådet snur. Få og store tall. */
+/** I Resultater etter konsekvenstabellen: de tre beslutningsreglene (tre kort i én rad) og grensene der rådet snur. */
 function fyllRaad(boks) {
   const d = state.data;
   const s = d.sesong;
@@ -791,12 +868,12 @@ function fyllRaad(boks) {
       h("td", { class: "handling" }, h("span", { class: "prikk" }), handlingNavn(g), g.type === "egen" ? h("span", { class: "merke varsel" }, "utenfor casen") : null),
       celle(g.nvNegativUnder, "nv"), celle(g.overRammenUnder, "behov"), celle(g.pakkeOverRammen, "pakke"))))));
 
-  boks.append(h("section", { class: "seksjon raad" },
+  boks.append(h("section", { class: "seksjon raad", id: "regler", "data-meny": "Regler" },
     h("h2", {}, "Hva snur rådet"),
     fork("p", "ingress", "Beslutningsreglene fra arbeidsboka og grensene der svaret snur. Regel 1 krever at rammen holder i alle scenarioene, regel 2 bare med verdiene som gjelder nå, og regel 3 ser bort fra rammen. Alle rangerer etter nåverdien nå. Avstå gir null og holder alltid rammen, så reglene velger avstå når resten gir tap. Grensene finnes med søk i motoren, med de andre forutsetningene som de er nå. Salget måles som andel av salget i 2026, og avstanden i billetter gjelder hele sesongen."),
     h("div", { class: "regler" }, ...regler.map(regelRad)),
     h("p", { class: "naa-linje svak" }, "Nå: ", h("b", { class: "tall" }, naaTekst), s.ramme != null ? [". Rammen er ", h("b", { class: "tall" }, kr(s.ramme))] : ". Ingen ramme satt", "."),
-    h("h3", { class: "grenser-tittel" }, "Grensene: hvor langt kan det gå før svaret snur?"),
+    h("h3", { class: "grenser-tittel", id: "grenser", "data-meny": "Grenser" }, "Grensene: hvor langt kan det gå før svaret snur?"),
     grenseForklaring(gr, s),
     tabell));
 }
@@ -806,14 +883,8 @@ function fyllResultater(innhold, res) {
   const s = d.sesong;
   const ref = salAv(state.referanse) ?? d.saler[0];
 
-  innhold.append(h("section", { class: "seksjon" },
-    fork("p", "ingress", "Stripa øverst viser nåverdi med 4 % realrente per år, og det største beløpet Sceneskift ligger ute med underveis, målt ved månedsslutt. Avstå gir null i begge. Ligger behovet over rammen, vises lånet som trengs (det saldoen ligger under rammen, som en kassekreditt) og renten på det. Renten holdes utenfor nåverdien, slik casen krever, og vises som egen linje."),
-    res.blandet ? h("p", { class: "varsel" }, `Egen plan bruker ${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(" og ")}. Casen sier at avtalene gjelder hele programmet, så en blanding krever at utleierne godtar enkeltkonserter. Vis det som et alternativ Maja kan ta opp før signering, ikke som et tilbud som finnes.`) : null,
-    lokaleeffektMerknad(), utvidelserMerknad()));
-
-  innhold.append(konsekvenstabell(res));
-  innhold.append(laanModul(res));
-
+  // Rekkefølgen (17.11): grafer, merknader, alle scenarioene, reglene og grensene, måned for måned, lån.
+  // Kontrollpanelet ligger over, i renderResultater.
   const etiketter = res.egen.saldo.map((_, t) => MAANEDER[t] ?? `M${t}`);
   const serier = [
     ...d.saler.map(x => ({ navn: x.kort ?? x.navn, farge: fargeFor(x), verdier: padTil(res.altI[x.id].saldo, etiketter.length) })),
@@ -822,7 +893,7 @@ function fyllResultater(innhold, res) {
   const saldoSvg = svg("Saldo per måned");
   const bidragSvg = svg("Bidrag per konsert");
   const refValg = h("select", { onchange: e => { state.referanse = e.target.value; render(); } }, ...d.saler.map(x => h("option", { value: x.id, selected: x.id === ref?.id }, `Alt i ${salTittel(x)}`)));
-  innhold.append(h("section", { class: "seksjon" },
+  innhold.append(h("section", { class: "seksjon", id: "grafer", "data-meny": "Grafer" },
     h("div", { class: "figur-rad" },
       h("div", { class: "figur" }, h("h3", {}, "Saldo ved månedsslutt"), fork("p", "liten svak", "Bunnen på hver linje er det salen krever i startfinansiering."),
         h("div", { class: "forklaring" }, ...serier.map(x => h("span", { style: `--c: var(--${x.farge})` }, x.navn))), saldoSvg),
@@ -834,9 +905,18 @@ function fyllResultater(innhold, res) {
     { navn: `Alt i ${ref?.kort}`, farge: fargeFor(ref), verdier: ref ? res.altI[ref.id].perKonsert.map(k => k.bidrag) : [] },
   ], d.program.map(k => `${k.nr}`));
 
+  // Merknader og forklaringen av stripa. Uten merknader og uten Forklaringer er seksjonen skjult i CSS.
+  innhold.append(h("section", { class: "seksjon merknader" },
+    fork("p", "ingress", "Stripa øverst viser nåverdi med 4 % realrente per år, og det største beløpet Sceneskift ligger ute med underveis, målt ved månedsslutt. Avstå gir null i begge. Ligger behovet over rammen, vises lånet som trengs (det saldoen ligger under rammen, som en kassekreditt) og renten på det. Renten holdes utenfor nåverdien, slik casen krever, og vises som egen linje. Når du ruller nedover, krymper stripa til navn, nåverdi og om rammen holder."),
+    res.blandet ? h("p", { class: "varsel" }, `Egen plan bruker ${res.egen.salerIBruk.map(id => salAv(id)?.navn).join(" og ")}. Casen sier at avtalene gjelder hele programmet, så en blanding krever at utleierne godtar enkeltkonserter. Vis det som et alternativ Maja kan ta opp før signering, ikke som et tilbud som finnes.`) : null,
+    lokaleeffektMerknad(), utvidelserMerknad()));
+
+  innhold.append(konsekvenstabell(res));
+  fyllRaad(innhold);
+
   const L = res.egen.linjer;
   const rad = (navn, verdier, cls = "") => h("tr", { class: cls }, h("td", {}, navn), ...verdier.map(v => h("td", { class: `hoyre tall ${v < 0 ? "minus" : ""}` }, v === 0 ? h("span", { class: "svak" }, "0") : tall(v))));
-  innhold.append(h("section", { class: "seksjon" },
+  innhold.append(h("section", { class: "seksjon", id: "maaned", "data-meny": "Måned for måned" },
     h("h2", {}, "Betalingene måned for måned, egen plan"),
     fork("p", "ingress", "Start er like før første konsertmåned og diskonteres ikke. Billettoppgjøret kommer måneden etter konserten, leie etter salens vilkår. Følg et tall herfra til stripa øverst."),
     h("div", { class: "tabellramme" }, h("table", { class: "kontantstrom" },
@@ -846,6 +926,9 @@ function fyllResultater(innhold, res) {
         ...(L.markedsforing?.some(Boolean) ? [rad("Ekstra markedsføring", L.markedsforing)] : []),
         rad("Sum i måneden", res.egen.cf), rad("Saldo", res.egen.saldo, "saldo"),
         ...(res.egen.laan > 0 ? [rad("Under rammen, lån", res.egen.trekk.map(x => -x)), rad("Rente på lånet", res.egen.renter.map(x => -x))] : []))))));
+
+  // Utenfor casen, så den står sist
+  innhold.append(laanModul(res));
 }
 
 /** Merknad når en sal har lokaleeffekt ulik 100 %, så det ikke skjer i stillhet. */
@@ -895,7 +978,7 @@ function konsekvenstabell(res) {
     { navn: "Avstå", farge: "graa", hent: r => r.avstaa },
   ];
   const holder = sc => rader.filter(r => r.navn !== "Avstå" && sc.res && r.hent(sc.res).holderRammen).map(r => r.navn.replace("Alt i ", "").split(":")[0]);
-  return h("section", { class: "seksjon" },
+  return h("section", { class: "seksjon", id: "alle-scenarioer", "data-meny": "Alle scenarioer" },
     h("h2", {}, "Alle scenarioene samlet"),
     fork("p", "ingress", "Konsekvenstabellen fra oppgaveteksten: én rad per handling, også å avstå, og én kolonne per scenario. Nåverdien står stort, og under hvor mye Sceneskift må ligge ute med. Rødt betyr tap eller over rammen. Den aktive kolonnen er valgt over."),
     h("div", { class: "tabellramme" }, h("table", { class: "konsekvens" },
@@ -918,7 +1001,7 @@ function laanModul(res) {
   const s = d.sesong;
   const hd = handlinger(s, d.saler, d.program).filter(a => a.type !== "avstaa");
   const medLaan = hd.map(a => ({ ...a, r: a.hent(s) })).filter(a => a.r.laan > 0);
-  const sek = h("section", { class: "seksjon laanmodul", id: "laan" },
+  const sek = h("section", { class: "seksjon laanmodul", id: "laan", "data-meny": "Lån" },
     h("h2", {}, "Lån ut over rammen ", h("span", { class: "merke varsel" }, "utenfor casen")),
     h("p", { class: "ingress synlig" }, `Casen sier at rammen på ${kr(s.ramme ?? 0)} er et krav. Her ser dere hva det koster å låne det som mangler. Kassekreditten er den samme som i arbeidsboka (Kontantstrøm rad 33 til 48, Resultater del 7 og Usikkerhet del 7). Fast lån finnes bare her. Når et valg trenger lån, viser siden nåverdien etter rente. Selve lånet (inn og tilbake) holdes utenfor nåverdien, bare renten trekkes fra.`));
   if (s.ramme == null || !medLaan.length) {
@@ -1253,7 +1336,7 @@ function renderForutsetninger(main) {
       h("option", { value: "maaned", selected: s.konvensjon === "maaned" }, "(1 + r/12)^t")),
     h("span"), fork("span", "liten svak", "Arbeidsboka bruker (1 + r)^(t/12). Den andre gir litt lavere nåverdi"),
     s.konvensjon !== "aar" ? h("button", { type: "button", class: "stille liten", onclick: () => { s.konvensjon = "aar"; oppdater(); } }, "Tilbake til casen") : h("span", { class: "liten svak" }, "Som i casen")));
-  main.append(h("section", { class: "seksjon" },
+  main.append(h("section", { class: "seksjon", id: "sesongen", "data-meny": "Forutsetningene" },
     h("h2", {}, "Forutsetningene for sesongen"),
     fork("p", "ingress", "Tallene fra Majas e-post og vedleggene. Alt kan endres, og alt kan settes tilbake. Faste 2026-kroner, før skatt og finansiering."),
     boks,
@@ -1265,7 +1348,7 @@ function renderForutsetninger(main) {
     ["uforutsett", "Uforutsette kostnader per konsert", "kr", "Det pakken ikke dekker, betalt i konsertmåneden. Casen: ingen andre kostnader", { step: 500, min: 0, merke: "utenfor casen" }],
     ["markedsforing", "Ekstra markedsføring for sesongen", "kr", "Fordelt likt på konsertene, betalt måneden før. Tenkt brukt med Høy etterspørsel: mer salg kommer sjelden av seg selv. Casen: ingen andre kostnader", { step: 1000, min: 0, merke: "utenfor casen" }],
   ];
-  main.append(h("section", { class: "seksjon" },
+  main.append(h("section", { class: "seksjon", id: "utenfor-casen", "data-meny": "Utenfor casen" },
     h("h2", {}, "Utenfor casen"),
     fork("p", "ingress", "Oppgaveteksten sier at det utover postene over og lokaleleien ikke er andre inntekter eller kostnader. Derfor står disse på 0, som gir casens tall. Pakkepris per konsert endres i Programmet. Rådet viser hva hver av dem gjør med rådet."),
     h("div", { class: "forutsetninger" }, ...utenfor.map(radFor))));
