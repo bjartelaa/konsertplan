@@ -2,7 +2,7 @@
 
 Et verktøy der en konsertarrangør legger inn forutsetninger, saler med leievilkår og et program, og ser bidrag per konsert, nåverdi, finansieringsbehov og saldo måned for måned. Bygget til MET3 Arbeidskrav 2 ved NHH (Bjarte Laa, Petter Garli og Maxime Boudailliez) som en tilleggsvri til muntlig eksamen: casen krever at alle tolv konsertene går i samme sal, og Konsertplan viser hva som skjer om Maja i Sceneskift tenker konsert for konsert.
 
-Sceneskift, salene og tallene er fiktive og laget for undervisning. Privat til etter innleveringsfristen 13.11.2026.
+Sceneskift, salene og tallene er fiktive og laget for undervisning. Åpen nettside: https://bjartelaa.github.io/konsertplan/ (presentasjonen: https://bjartelaa.github.io/sceneskift-kart/site/).
 
 ## Åpne
 
