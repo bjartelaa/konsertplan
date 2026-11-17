@@ -50,7 +50,7 @@ Alle tre endres under Rådet og Forutsetninger. Resultater og Rådet viser en me
 
 ## Spør: chatbot for Maja
 
-Fanen «Spør» lar Maja stille spørsmål med egne ord. Svarene skrives av en språkmodell (Claude Opus 5.5 fra Anthropic, `claude-opus-5-5`), men modellen regner ikke selv. Arbeidsdelingen er den foreleser beskrev 4.11: motoren regner, språkmodellen formidler (`src/chat.js`).
+Gaffarullen nede til høyre åpner chatpanelet fra alle fanene (lenker til `#spor` åpner det også). Der kan Maja stille spørsmål med egne ord. Svarene skrives av en språkmodell (Claude Opus 5.5 fra Anthropic, `claude-opus-5-5`), men modellen regner ikke selv. Arbeidsdelingen er den foreleser beskrev 4.11: motoren regner, språkmodellen formidler (`src/chat.js`).
 
 1. Modellen får forutsetningene og resultatene fra motoren som JSON (`tilstand`): rådet, verdi og «må ha klart» for hvert valg nå og ved 20 % lavere salg, når rådet snur, grensene, reglene fra arbeidsboka og programmet. Forskjeller den trenger (over eller under rammen, mot rådet) er regnet ferdig. Tallene sendes med Majas første spørsmål og på nytt bare når planen er endret.
 2. Spør Maja «hva om», bruker modellen verktøyet `prov_endring` (salg, pakke, startfinansiering, billettpris, scenario, og utenfor casen: bar, uforutsette kostnader, lokaleeffekt, sal, salg, oppsett og pakke per konsert). Verktøyet endrer en kopi av planen, motoren regner, og modellen får tallene før og etter. Ugyldige verdier avvises med en feilmelding til modellen, og ingenting regnes.
