@@ -86,6 +86,8 @@ Kontrolltallene (basis): nåverdi A 51 324, B 201 394, C 173 787 kr, behov A 231
 
 ## Utvikle
 
+Lenkene til `css/konsertplan.css` og `konsertplan.js` i `index.html` har `?v=<dato><bokstav>`. Bytt det ved hver publisering, så nettleseren ikke blander ny side med gamle filer fra hurtiglageret.
+
 ```
 node --test            # kjører testene
 node scripts/bygg.js   # bygger konsertplan.js på nytt etter endringer i src/
