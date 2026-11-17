@@ -178,7 +178,8 @@ export function beregnPlan(sesong, saler, program, salVelger) {
 }
 
 /**
- * Lån ut over rammen (utvidelse utenfor casen: casen sier at rammen er et krav, og arbeidsboka har ikke lån).
+ * Lån ut over rammen (utvidelse utenfor casen: casen sier at rammen er et krav. Kassekreditten er den samme som i arbeidsboka,
+ * Kontantstrøm rad 33 til 48, Resultater del 7 og Usikkerhet del 7. Fast lån finnes bare her).
  * Saldoen uten lån er den samme som før, så nåverdien og finansieringsbehovet er casens tall. Lånet legges oppå:
  *   kassekreditt  (sesong.laanType "kassekreditt", standard) trekkes bare på det saldoen ligger under rammen ved
  *                 hvert månedsslutt, og betales ned av seg selv når oppgjørene kommer

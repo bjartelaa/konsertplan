@@ -920,7 +920,7 @@ function laanModul(res) {
   const medLaan = hd.map(a => ({ ...a, r: a.hent(s) })).filter(a => a.r.laan > 0);
   const sek = h("section", { class: "seksjon laanmodul", id: "laan" },
     h("h2", {}, "Lån ut over rammen ", h("span", { class: "merke varsel" }, "utenfor casen")),
-    h("p", { class: "ingress synlig" }, `Casen sier at rammen på ${kr(s.ramme ?? 0)} er et krav, og arbeidsboka har ikke lån. Her ser dere hva det koster å låne det som mangler. Når et valg trenger lån, viser siden nåverdien etter rente. Selve lånet (inn og tilbake) holdes utenfor nåverdien, bare renten trekkes fra.`));
+    h("p", { class: "ingress synlig" }, `Casen sier at rammen på ${kr(s.ramme ?? 0)} er et krav. Her ser dere hva det koster å låne det som mangler. Kassekreditten er den samme som i arbeidsboka (Kontantstrøm rad 33 til 48, Resultater del 7 og Usikkerhet del 7). Fast lån finnes bare her. Når et valg trenger lån, viser siden nåverdien etter rente. Selve lånet (inn og tilbake) holdes utenfor nåverdien, bare renten trekkes fra.`));
   if (s.ramme == null || !medLaan.length) {
     sek.append(h("p", { class: "naa-linje svak" }, s.ramme == null ? "Ingen ramme satt, så ingen trenger lån." : "Ingen av valgene trenger lån med forutsetningene nå."));
     return sek;

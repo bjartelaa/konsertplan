@@ -183,7 +183,8 @@ function beregnPlan(sesong, saler, program, salVelger) {
 }
 
 /**
- * Lån ut over rammen (utvidelse utenfor casen: casen sier at rammen er et krav, og arbeidsboka har ikke lån).
+ * Lån ut over rammen (utvidelse utenfor casen: casen sier at rammen er et krav. Kassekreditten er den samme som i arbeidsboka,
+ * Kontantstrøm rad 33 til 48, Resultater del 7 og Usikkerhet del 7. Fast lån finnes bare her).
  * Saldoen uten lån er den samme som før, så nåverdien og finansieringsbehovet er casens tall. Lånet legges oppå:
  *   kassekreditt  (sesong.laanType "kassekreditt", standard) trekkes bare på det saldoen ligger under rammen ved
  *                 hvert månedsslutt, og betales ned av seg selv når oppgjørene kommer
@@ -911,7 +912,7 @@ function slikRegnesDet(s) {
     verdi_for_sceneskift:
       `Alle inn- og utbetalinger fra før januar til siste oppgjør, regnet om til dagens kroner med ${r} % realrente per år: et beløp ved slutten av måned t ganges med 1 / (1 + ${r} %) opphøyd i t/12. Summen er verdien (nåverdien). Planleggingen er betalt uansett og er ikke med.`,
     laan_ut_over_rammen:
-      `Utvidelse utenfor casen, gruppas antakelse. Casen sier at rammen er et krav, og arbeidsboka har ikke lån. Går kontoen lenger ned enn rammen ved et månedsslutt, må det som mangler lånes. ` +
+      `Utvidelse utenfor casen, gruppas antakelse. Casen sier at rammen er et krav. Arbeidsboka regner den samme kassekreditten i Kontantstrøm (rad 33 til 48), Resultater del 7 og Usikkerhet del 7. Fast lån finnes bare i Konsertplan. Går kontoen lenger ned enn rammen ved et månedsslutt, må det som mangler lånes. ` +
       `Lånetypen nå er ${s.laanType === "fast" ? `fast lån, tatt opp ${s.laanStart ? `ved slutten av måned ${s.laanStart}` : "før januar"} og betalt tilbake når kontoen er innenfor rammen igjen (eller i måneden gruppa har valgt). Det et fast lån ikke dekker, går på kassekreditt` : "kassekreditt: det som mangler hver måned lånes den måneden, og lånet betales ned av seg selv når oppgjørene kommer"}. ` +
       `Renten er ${lr} % per år og regnes per måned: lånet den måneden ganger ${lr} % delt på 12. Rentekostnaden er summen av månedene. ` +
       `Når et valg trenger lån, er verdien som vises i Konsertplan verdi etter rente: rentene trukket fra, regnet om til dagens kroner. Lånebeløpet selv (inn og tilbake) er ikke med i verdien. Tallene per måned står i laan_per_maaned for hvert valg. ` +
@@ -2278,7 +2279,7 @@ function laanModul(res) {
   const medLaan = hd.map(a => ({ ...a, r: a.hent(s) })).filter(a => a.r.laan > 0);
   const sek = h("section", { class: "seksjon laanmodul", id: "laan" },
     h("h2", {}, "Lån ut over rammen ", h("span", { class: "merke varsel" }, "utenfor casen")),
-    h("p", { class: "ingress synlig" }, `Casen sier at rammen på ${kr(s.ramme ?? 0)} er et krav, og arbeidsboka har ikke lån. Her ser dere hva det koster å låne det som mangler. Når et valg trenger lån, viser siden nåverdien etter rente. Selve lånet (inn og tilbake) holdes utenfor nåverdien, bare renten trekkes fra.`));
+    h("p", { class: "ingress synlig" }, `Casen sier at rammen på ${kr(s.ramme ?? 0)} er et krav. Her ser dere hva det koster å låne det som mangler. Kassekreditten er den samme som i arbeidsboka (Kontantstrøm rad 33 til 48, Resultater del 7 og Usikkerhet del 7). Fast lån finnes bare her. Når et valg trenger lån, viser siden nåverdien etter rente. Selve lånet (inn og tilbake) holdes utenfor nåverdien, bare renten trekkes fra.`));
   if (s.ramme == null || !medLaan.length) {
     sek.append(h("p", { class: "naa-linje svak" }, s.ramme == null ? "Ingen ramme satt, så ingen trenger lån." : "Ingen av valgene trenger lån med forutsetningene nå."));
     return sek;
