@@ -30,6 +30,56 @@ export function glemNokkel(lager) {
 /* ---------- Tallene modellen får ---------- */
 const kroner = v => Math.round(v ?? 0);
 const prosent1 = v => Math.round((v ?? 0) * 1000) / 10;
+const tall = v => Math.round(v ?? 0).toLocaleString("nb-NO").replace(/\s/g, " "); // vanlig mellomrom, ikke hardt
+
+/** Leievilkårene til en sal i klartekst, fra byggeklossene i motoren. */
+function leieTekst(sal, mnd) {
+  const naar = { konsertmaaned: "i konsertmåneden", maanedEtter: "måneden etter konserten", maanedFoer: "måneden før konserten" };
+  return (sal.leie ?? []).map(b => {
+    if (b.type === "perKonsert") return `${tall(b.belop)} kr per konsert, betales ${naar[b.naar] ?? b.naar}`;
+    if (b.type === "andel") return `${prosent1(b.andel)} % av billettoppgjøret (billettpris minus gebyr), minst ${tall(b.minimum)} kr per konsert, betales ${naar[b.naar] ?? b.naar}`;
+    if (b.type === "engang") return `${b.navn ?? "Engangsbeløp"} ${tall(b.belop)} kr, betales ${(mnd[b.tidspunkt ?? 0] ?? "").toLowerCase()}`;
+    if (b.type === "sesong") return `${b.navn ?? "Sesongleie"} ${tall(b.belop)} kr for hele våren, betales ${(b.plan ?? []).map(p => `${tall(b.belop * p.andel)} kr ${p.tidspunkt === 0 ? "før januar" : `ved slutten av ${(mnd[p.tidspunkt] ?? "").toLowerCase()}`}`).join(" og ")}`;
+    return JSON.stringify(b);
+  }).join(". ");
+}
+
+/** Hvordan Konsertplan regner, i klartekst, med verdiene som gjelder nå. Modellen bruker dette til å forklare. */
+function slikRegnesDet(s) {
+  const r = prosent1(s.rente), lr = prosent1(s.laanRente);
+  return {
+    pengene_per_konsert:
+      `Billettoppgjøret er antall betalte billetter ganger (billettpris ${tall(s.billettpris)} kr minus gebyr ${tall(s.gebyr)} kr), og kommer måneden etter konserten. ` +
+      `Publikumsutgiften er ${tall(s.utgiftPerBillett)} kr per billett, betalt i konsertmåneden. ` +
+      `Pakken fra Rigg & Ro betales med ${prosent1(s.pakkeDel1Andel ?? 0.5)} % måneden før konserten og resten i konsertmåneden. ` +
+      `Leien følger vilkårene til salen (se saler). Antall billetter er forventet salg, men aldri mer enn plassene i salen.`,
+    kontoen_ved_maanedsslutt:
+      "Kontoen starter på 0 rett før januar. Hver måned legges inn- og utbetalingene til. Tallene per måned står i kontoen_ved_maanedsslutt_kr for hvert valg.",
+    maa_ha_klart:
+      "Det laveste kontoen kommer ved et månedsslutt, som et positivt beløp. Det er startfinansieringen dere trenger (finansieringsbehovet). Holder det seg under rammen, holder valget rammen.",
+    verdi_for_sceneskift:
+      `Alle inn- og utbetalinger fra før januar til siste oppgjør, regnet om til dagens kroner med ${r} % realrente per år: et beløp ved slutten av måned t ganges med 1 / (1 + ${r} %) opphøyd i t/12. Summen er verdien (nåverdien). Planleggingen er betalt uansett og er ikke med.`,
+    laan_ut_over_rammen:
+      `Utvidelse utenfor casen, gruppas antakelse. Casen holder lån utenfor. Går kontoen lenger ned enn rammen ved et månedsslutt, regnes det som ligger under rammen som et lån (kassekreditt) den måneden. ` +
+      `Lånet er det største slike beløpet. Renten er ${lr} % per år og regnes per måned: lånet den måneden ganger ${lr} % delt på 12. Rentekostnaden er summen av månedene. ` +
+      `Renten holdes utenfor verdien for Sceneskift. Verdi etter rente trekker rentene fra, regnet om til dagens kroner. Tallene per måned står i laan_per_maaned for hvert valg. ` +
+      `Lånet gjør et valg mulig, men ikke tryggere: blir salget lavere, må lånet bli større.`,
+  };
+}
+
+/** Lånetallene og kontoen per måned for en handling, fra motoren. Avstå har ingen pengestrøm. */
+function pengerPerMaaned(r, mnd) {
+  if (!r?.saldo) return { kontoen_ved_maanedsslutt_kr: null, laan_ut_over_rammen_kr: 0, maaneder_med_laan: 0, laan_per_maaned: [], rentekostnad_kr: 0, verdi_etter_rente_kr: 0 };
+  const navn = t => mnd[t] ?? `Måned ${t}`;
+  return {
+    kontoen_ved_maanedsslutt_kr: Object.fromEntries(r.saldo.map((v, t) => [navn(t), kroner(v)])),
+    laan_ut_over_rammen_kr: kroner(r.laan),
+    maaneder_med_laan: r.maanederMedLaan ?? 0,
+    laan_per_maaned: (r.trekk ?? []).map((v, t) => (v > 0 ? { maaned: navn(t), laan_kr: kroner(v), rente_kr: kroner(r.renter[t]) } : null)).filter(Boolean),
+    rentekostnad_kr: kroner(r.rentekostnad),
+    verdi_etter_rente_kr: kroner(r.nvEtterRente),
+  };
+}
 
 /** En grense fra motoren, uten fagord. enhet "salg" gir prosent av 2026-salget, "kr" gir kroner. */
 function chatGrense(g, enhet) {
@@ -59,6 +109,8 @@ export function tilstand(data) {
   if (lokal.length) utenfor.push("lokaleeffekt");
   if (res.blandet) utenfor.push("blandet program");
   const g = R.grense;
+  const mnd = s.maanedsnavn ?? [];
+  const resFor = id => (id === "egen" ? res.egen : id === "avstaa" ? null : res.altI[id]);
   const snuTil = p => (p?.status === "grense" ? { verdi: kroner(p.verdi), raadet_blir: p.til ? navnFor(p.til) : null } : "snur ikke innenfor det vi har prøvd");
   return {
     forutsetninger: {
@@ -96,6 +148,7 @@ export function tilstand(data) {
       leie_foer_foerste_konsert_kr: kroner(x.leieFoerStart),
       fulle_konserter: x.fulleKonserter,
       billetter_som_gaar_tapt_fordi_salen_er_full: kroner(x.tapteBilletter),
+      ...pengerPerMaaned(resFor(x.id), mnd),
     })),
     naar_raadet_snur: valg.type === "avstaa" ? {
       merknad: "Rådet er å avstå. Startfinansieringen under er det som gir et annet råd.",
@@ -118,7 +171,8 @@ export function tilstand(data) {
       pakken_der_rammen_ryker: chatGrense(x.pakkeOverRammen, "kr"),
     })),
     regler_fra_arbeidsboka: beslutningsregler(s, saler, program).map(r => ({ regel: `${r.nr} ${r.navn}`, krav: r.krav, velger: r.valg.type === "avstaa" ? "Avstå" : navnFor(r.valg) })),
-    saler: saler.map(x => ({ id: x.id, navn: x.navn, plasser_staaende: x.kapasitet?.staa ?? null, plasser_sittende: x.kapasitet?.sitte ?? null,
+    slik_regnes_det: slikRegnesDet(s),
+    saler: saler.map(x => ({ id: x.id, navn: x.navn, leie: leieTekst(x, mnd), plasser_staaende: x.kapasitet?.staa ?? null, plasser_sittende: x.kapasitet?.sitte ?? null,
                              sitteplasser_antatt: !!x.sitteAntatt, kun_hel_sesong: !!x.kunHelSesong })),
     program: program.map((k, i) => ({
       nr: k.nr, dato: k.dato, artist: k.artist, sjanger: k.sjanger,
@@ -304,12 +358,14 @@ export const SYSTEM = `Du er hjelperen i Konsertplan, et verktøy laget for Maja
 
 Slik jobber du:
 - Du regner aldri selv. Hvert tall i svaret ditt skal stå i tallene fra Konsertplan som du har fått, eller i svaret fra verktøyet prov_endring. Ikke legg sammen, trekk fra, gang eller del, heller ikke for å finne en forskjell. Trenger du et tall som ikke står der, bruk verktøyet. Kan ikke verktøyet regne det, si at Konsertplan ikke viser det.
+- Spør Maja hvordan et tall er regnet, forklar det med slik_regnes_det og tallene per måned for valget det gjelder. Du kan vise regnestykket slik det står der, med tallene du har fått, men regn ikke ut nye tall.
+- «Lånet» betyr lån ut over rammen (kassekreditten i slik_regnes_det.laan_ut_over_rammen), ikke startfinansieringen. Trenger valget hun ser på ikke lån, si det, og vis hvilket valg som trenger lån og hvor mye. Kan spørsmålet bety begge deler, si kort hvilket du svarer på.
 - Spør Maja «hva om» (annet salg, annen pakkepris, mer startfinansiering, bar, uforutsette kostnader, en konsert i en annen sal), bruk prov_endring. Det endrer ikke planen hennes. Hun kan selv trykke «Bruk i planen» under svaret ditt.
 - Svar kort: to til fem setninger, eller noen få korte punkter med «- » foran. Svaret først, så hvorfor.
 - Skriv på Majas språk, på norsk bokmål. Hun er arrangør, ikke økonom. Si «verdi for Sceneskift» (i dagens kroner) i stedet for nåverdi, og «det dere må ha klart» eller «startfinansieringen dere trenger» i stedet for finansieringsbehov. Forklar ordene bare hvis hun spør.
 - Skriv beløp som «173 787 kr» og prosent som «79,8 %». Ingen markdown: ingen stjerner, overskrifter eller tabeller. Bruk aldri tankestrek eller bindestrek som skilletegn i en setning.
 - Rådet følger regelen i gruppas notat: høyest verdi blant valgene som holder rammen både med salget nå og hvis salget blir 20 % lavere. Gi aldri et annet råd enn Konsertplan. Er Maja uenig, vis hva som må endres for at rådet skal snu.
-- Casen sier at det utover billettene, publikumsutgiften, pakken og leien ikke er andre inntekter eller kostnader. Bar, uforutsette kostnader, pakkepris per konsert, saler blandet per konsert og lokaleeffekt er gruppas utvidelser. Når svaret bruker dem, si at det er utenfor casen.
+- Casen sier at det utover billettene, publikumsutgiften, pakken og leien ikke er andre inntekter eller kostnader. Bar, uforutsette kostnader, pakkepris per konsert, saler blandet per konsert og lokaleeffekt er gruppas utvidelser. Når svaret bruker dem, si at det er utenfor casen. Står noe i forutsetninger.utenfor_casen.i_bruk_naa (for eksempel blandet program), nevn det alltid i svaret.
 - Du vet ikke mer om salene, artistene eller markedet enn det som står i tallene. Ikke finn på fakta.
 - Handler spørsmålet om noe annet enn sesongen og rådet, si kort at du bare kan hjelpe med Konsertplan.
 

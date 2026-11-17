@@ -288,3 +288,32 @@ test("forslagene til spørsmål følger rådet", () => {
   assert.ok(f.map(x => x.replace(/\s/g, " ")).includes("Hva om Rigg & Ro vil ha 72 000 kr per konsert?"));
   assert.ok(tilstandTekst(d).length < 12000);
 });
+
+test("tilstanden forklarer utregningen og har lånet og kontoen per måned fra motoren", () => {
+  const t = tilstand(standardSesong());
+  for (const k of ["pengene_per_konsert", "kontoen_ved_maanedsslutt", "maa_ha_klart", "verdi_for_sceneskift", "laan_ut_over_rammen"]) {
+    assert.ok(t.slik_regnes_det[k]?.length > 50, `forklaring mangler: ${k}`);
+  }
+  assert.match(t.slik_regnes_det.laan_ut_over_rammen, /12 % per år/);
+  assert.match(t.slik_regnes_det.verdi_for_sceneskift, /4 % realrente/);
+  const B = t.valgene.find(v => v.navn.startsWith("Søyleverket"));
+  // Som Rådet og Resultater: 66 100 kr i lån i 3 måneder, ca. 1 559 kr i rente, nåverdi etter rente 199 846
+  assert.equal(B.laan_ut_over_rammen_kr, 66100);
+  assert.equal(B.maaneder_med_laan, 3);
+  assert.equal(B.rentekostnad_kr, 1559);
+  assert.equal(B.verdi_etter_rente_kr, 199846);
+  assert.equal(B.laan_per_maaned.length, 3);
+  assert.equal(Math.max(...B.laan_per_maaned.map(m => m.laan_kr)), 66100);
+  assert.equal(Math.min(...Object.values(B.kontoen_ved_maanedsslutt_kr)), -316100);
+  const C = t.valgene.find(v => v.navn.startsWith("Skarvkaien"));
+  assert.equal(C.laan_ut_over_rammen_kr, 0);
+  assert.deepEqual(C.laan_per_maaned, []);
+  assert.equal(Math.min(...Object.values(C.kontoen_ved_maanedsslutt_kr)), -216696);
+  const avstaa = t.valgene.find(v => v.navn === "Avstå");
+  assert.equal(avstaa.laan_ut_over_rammen_kr, 0);
+  const salB = t.saler.find(s => s.id === "B");
+  assert.match(salB.leie, /35 000 kr, betales før januar/);
+  assert.match(salB.leie, /70 000 kr før januar og 70 000 kr ved slutten av mars/);
+  assert.match(t.saler.find(s => s.id === "C").leie, /18 % av billettoppgjøret.*minst 7 500 kr/);
+  assert.match(SYSTEM, /«Lånet» betyr lån ut over rammen/);
+});
